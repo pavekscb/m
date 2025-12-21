@@ -14,7 +14,7 @@
 
 ## 📥 Скачать
 Вы можете найти готовый установочный файл в разделе Releases:
-👉 **[Скачать app-debug.apk](https://github.com/pavekscb/m/releases)**
+👉 **[meeiro-v1-0-2.apk](https://github.com/pavekscb/m/releases)**
 
 ---
 
