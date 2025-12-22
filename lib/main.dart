@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 // --- КОНСТАНТЫ ПРИЛОЖЕНИЯ И ВЕРСИИ ---
-const String currentVersion = "1.0.2";
+const String currentVersion = "1.0.3";
 const String urlGithubApi = "https://api.github.com/repos/pavekscb/m/releases/latest";
 
 const String walletKey = "WALLET_ADDRESS"; 
@@ -147,7 +147,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void _updateWalletLabelText() {
     String displayAddress = "${currentWalletAddress.substring(0, 6)}...${currentWalletAddress.substring(currentWalletAddress.length - 4)}";
     if (currentWalletAddress == defaultExampleAddress) {
-      walletLabelText = "Кошелек: $displayAddress (ПРИМЕР)";
+      walletLabelText = "Кошелек: $displayAddress (Смените кошелек на свой!)";
       walletLabelColor = Colors.orange.shade800;
     } else {
       walletLabelText = "Кошелек: $displayAddress";
@@ -207,7 +207,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       aptVal = aptRaw / 1e8;
       int meeDec = await _getCoinDecimals(meeCoinT0T1);
       int meeRaw = await _getRawBalance(meeCoinT0T1);
-      meeVal = meeRaw / (BigInt.from(10).pow(meeDec).toDouble());
+      meeVal = (meeRaw * rawDataCorrectionFactor) / (BigInt.from(10).pow(meeDec).toDouble());
     } catch (e) {}
 
     if (currentWalletAddress.length != 66 || !currentWalletAddress.startsWith("0x")) {
