@@ -14,7 +14,7 @@
 
 ## 📥 Скачать
 Вы можете найти готовый установочный файл в разделе Releases:
-👉 **[meeiro-v1-0-3.apk](https://github.com/pavekscb/m/releases)**
+👉 **[mee.apk](https://github.com/pavekscb/m/releases)**
 
 ---
 
