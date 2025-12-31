@@ -5,9 +5,10 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:math'; // Добавлено для pow
 
 // --- КОНСТАНТЫ ПРИЛОЖЕНИЯ И ВЕРСИИ ---
-const String currentVersion = "1.0.3";
+const String currentVersion = "1.0.4"; 
 const String urlGithubApi = "https://api.github.com/repos/pavekscb/m/releases/latest";
 
 const String walletKey = "WALLET_ADDRESS"; 
@@ -29,9 +30,8 @@ const String unstakeBaseUrl = "https://explorer.aptoslabs.com/account/0x514cfb77
 
 // КОНСТАНТЫ: Ссылки для кнопок
 const String urlSource = "https://github.com/pavekscb/m";
-const String urlSite = "https://meeiro.xyz/staking";
 const String urlGraph = "https://dexscreener.com/aptos/pcs-167";
-const String urlSwapEarnium = "https://app.panora.exchange/swap/aptos?pair=MEE-APT";
+const String urlSwapEarnium = "https://app.panora.exchange/?ref=V94RDWEH#/swap/aptos?pair=MEE-APT";
 const String urlSupport = "https://t.me/cripto_karta";
 
 void main() {
@@ -47,8 +47,9 @@ class MeeiroApp extends StatelessWidget {
       title: 'MEE Mining',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
+        brightness: Brightness.dark,
         primarySwatch: Colors.blue,
-        scaffoldBackgroundColor: const Color(0xFFFFFFFF),
+        scaffoldBackgroundColor: const Color(0xFF121212),
         fontFamily: 'Arial',
       ),
       home: const HomeScreen(),
@@ -70,20 +71,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   int countdownVal = updateIntervalSeconds;
   bool isRunning = false;
   
+  double priceApt = 0.0;
+  double priceMee = 0.0;
+
   final List<String> animationFrames = ['🌱', '🌿', '💰'];
   int currentFrameIndex = 0;
   String rewardTickerText = "[Загрузка]";
   Timer? simulationTimer;
 
   String walletLabelText = "Кошелек: Загрузка...";
-  Color walletLabelColor = Colors.black;
+  Color walletLabelColor = Colors.white;
   String onChainBalancesText = "Загрузка балансов...";
-  String meeBalanceText = "0,00000000 \$MEE";
+  String meeBalanceText = "0,00 \$MEE (\$0,00)";
   String meeRewardText = "0,00000000 \$MEE";
   String meeRateText = "Скорость: 0,00 MEE/сек";
   
   String updateStatusText = "";
-  Color updateStatusColor = const Color(0xFF666666);
+  Color updateStatusColor = const Color(0xFFBBBBBB);
   VoidCallback? updateAction;
 
   @override
@@ -147,20 +151,102 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void _updateWalletLabelText() {
     String displayAddress = "${currentWalletAddress.substring(0, 6)}...${currentWalletAddress.substring(currentWalletAddress.length - 4)}";
     if (currentWalletAddress == defaultExampleAddress) {
-      walletLabelText = "Кошелек: $displayAddress (Смените кошелек на свой!)";
-      walletLabelColor = Colors.orange.shade800;
+      walletLabelText = "Кошелек: $displayAddress (Смените на свой!)";
+      walletLabelColor = Colors.orangeAccent;
     } else {
       walletLabelText = "Кошелек: $displayAddress";
-      walletLabelColor = Colors.purple;
+      walletLabelColor = Colors.purpleAccent;
+    }
+  }
+
+  // Новая функция для получения цены APT с Bybit
+  Future<double> _getAptPriceBybit() async {
+    try {
+      final headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+      };
+      final resApt = await http.get(
+        Uri.parse("https://api.bybit.com/v5/market/tickers?category=spot&symbol=APTUSDT"),
+        headers: headers,
+      ).timeout(const Duration(seconds: 5));
+      if (resApt.statusCode == 200) {
+        final data = json.decode(resApt.body);
+        return double.tryParse(data['result']['list'][0]['lastPrice'].toString()) ?? 0.0;
+      }
+    } catch (e) {
+      debugPrint("Bybit APT price fetch error: $e");
+    }
+    return 0.0;
+  }
+
+  // Новая функция для получения резервов пула ликвидности
+  Future<Map<String, int>> _getPoolReserves() async {
+    try {
+      String resourceType = "0xc7efb4076dbe143cbcd98cfaaa929ecfc8f299203dfff63b95ccb6bfe19850fa::swap::TokenPairMetadata<$aptCoinType,$meeCoinT0T1>";
+      final url = Uri.parse("$aptLedgerUrl/accounts/0xc7efb4076dbe143cbcd98cfaaa929ecfc8f299203dfff63b95ccb6bfe19850fa/resource/${Uri.encodeComponent(resourceType)}");
+      final headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+      };
+      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body)['data'];
+        return {
+          'apt': int.tryParse(data['balance_x']['value'].toString()) ?? 0,
+          'mee': int.tryParse(data['balance_y']['value'].toString()) ?? 0,
+        };
+      }
+    } catch (e) {
+      debugPrint("Pool reserves fetch error: $e");
+    }
+    return {'apt': 0, 'mee': 0};
+  }
+
+  Future<void> _updatePrices() async {
+    try {
+      // Получаем цену APT с Bybit
+      priceApt = await _getAptPriceBybit();
+
+      // Получаем резервы пула
+      final reserves = await _getPoolReserves();
+      int aptReserveRaw = reserves['apt'] ?? 0;
+      int meeReserveRaw = reserves['mee'] ?? 0;
+
+      // Получаем decimals для MEE (APT всегда 8)
+      int aptDec = 8;
+      int meeDec = await _getCoinDecimals(meeCoinT0T1);
+
+      // Нормализуем резервы
+      double aptReserveNorm = aptReserveRaw / pow(10, aptDec);
+      double meeReserveNorm = meeReserveRaw / pow(10, meeDec);
+
+      // Вычисляем цену MEE в USD: (APT reserve / MEE reserve) * priceApt
+      if (meeReserveNorm > 0) {
+        double priceMeeInApt = aptReserveNorm / meeReserveNorm;
+        priceMee = ((priceMeeInApt * priceApt) / 100)* 0.997;
+      } else {
+        priceMee = 0.0;
+      }
+    } catch (e) {
+      debugPrint("Price calculation error: $e");
+      priceApt = 0.0;
+      priceMee = 0.0;
     }
   }
 
   Future<int> _getRawBalance(String coinType) async {
     try {
       final url = Uri.parse("$aptLedgerUrl/accounts/$currentWalletAddress/balance/$coinType");
-      final response = await http.get(url, headers: {"Accept": "application/json"});
+      final headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+      };
+      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) return int.parse(response.body);
-    } catch (e) {}
+    } catch (e) {
+      debugPrint("Balance fetch error: $e");
+    }
     return 0;
   }
 
@@ -168,39 +254,58 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     try {
       String moduleAddress = coinType.split("::")[0];
       final url = Uri.parse("$aptLedgerUrl/accounts/$moduleAddress/resource/0x1::coin::CoinInfo<$coinType>");
-      final response = await http.get(url).timeout(const Duration(seconds: 5));
+      final headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+      };
+      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return int.parse(data["data"]["decimals"]);
       }
-    } catch (e) {}
+    } catch (e) {
+      debugPrint("Decimals fetch error: $e");
+    }
     return 8;
   }
 
   Future<int?> _fetchLedgerTimestamp() async {
     try {
-      final response = await http.get(Uri.parse(aptLedgerUrl)).timeout(const Duration(seconds: 5));
+      final headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+      };
+      final response = await http.get(Uri.parse(aptLedgerUrl), headers: headers).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return int.parse(data["ledger_timestamp"]) ~/ 1000000;
       }
-    } catch (e) {}
+    } catch (e) {
+      debugPrint("Timestamp fetch error: $e");
+    }
     return null;
   }
 
   Future<dynamic> _fetchData(String apiUrl) async {
     try {
-      final response = await http.get(Uri.parse(apiUrl)).timeout(const Duration(seconds: 5));
+      final headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+      };
+      final response = await http.get(Uri.parse(apiUrl), headers: headers).timeout(const Duration(seconds: 5));
       if (response.statusCode == 404) {
         if (apiUrl.contains("StakeInfo")) return {"amount": "0", "reward_amount": "0", "reward_debt": "0"};
         return null;
       }
       if (response.statusCode == 200) return json.decode(response.body)["data"];
-    } catch (e) {}
+    } catch (e) {
+      debugPrint("Data fetch error: $e");
+    }
     return null;
   }
 
   Future<void> _runUpdateThread() async {
+    await _updatePrices();
     double aptVal = 0; double meeVal = 0;
     try {
       int aptRaw = await _getRawBalance(aptCoinType);
@@ -280,10 +385,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void _updateUI(double? balance, double? reward, double rate, double aptOnChain, double meeOnChain) {
     if (!mounted) return;
     setState(() {
-      onChainBalancesText = "Баланс кошелька: ${aptOnChain.toStringAsFixed(6)} APT | ${meeOnChain.toStringAsFixed(6)} MEE";
+      double aptTotalUsd = aptOnChain * priceApt;
+      double meeTotalUsd = meeOnChain * priceMee;
+
+      // Вывод в формате: APT: 1.23 ($10.0 / $12.3) | MEE: 100.0 ($0.0019 / $0.19)
+      onChainBalancesText = "APT: ${aptOnChain.toStringAsFixed(4)} (\$$priceApt / \$${aptTotalUsd.toStringAsFixed(4)}) | MEE: ${meeOnChain.toStringAsFixed(2)} (\$${priceMee.toStringAsFixed(6)} / \$${meeTotalUsd.toStringAsFixed(4)})";
+      
       if (balance == null || reward == null) {
-        meeBalanceText = "Ошибка! Проверьте адрес или сеть.";
-        meeRewardText = "Ошибка! Проверьте адрес или сеть.";
+        meeBalanceText = "Ошибка сети!";
+        meeRewardText = "Ошибка!";
         meeRateText = "Скорость: Ошибка";
         rewardTickerText = "[ОШИБКА]";
         isRunning = false;
@@ -291,8 +401,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       }
       meeRatePerSec = rate;
       meeCurrentReward = reward;
-      meeBalanceText = "${balance.toStringAsFixed(8)} \$MEE".replaceAll(".", ",");
-      meeRateText = "Скорость: ${meeRatePerSec.toStringAsFixed(12)} MEE/сек".replaceAll(".", ",");
+      
+      String balUsd = (balance * priceMee).toStringAsFixed(6);
+      meeBalanceText = "${balance.toStringAsFixed(2)} \$MEE (\$$balUsd)".replaceAll(".", ",");
+      
+      meeRateText = "Скорость: ${meeRatePerSec.toStringAsFixed(10)} MEE/сек".replaceAll(".", ",");
       _updateRewardLabelsOnly();
       isRunning = true;
       countdownVal = updateIntervalSeconds;
@@ -300,14 +413,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _updateRewardLabelsOnly() {
-    meeRewardText = "${meeCurrentReward.toStringAsFixed(8)} \$MEE".replaceAll(".", ",");
+    String rewardUsd = (meeCurrentReward * priceMee).toStringAsFixed(6);
+    meeRewardText = "${meeCurrentReward.toStringAsFixed(8)} \$MEE (\$$rewardUsd)".replaceAll(".", ",");
   }
 
   Future<void> _checkUpdates({required bool manualCheck}) async {
     if (!manualCheck) {
       setState(() {
-        updateStatusText = "Версия v$currentVersion [Проверка обновлений...]";
-        updateStatusColor = const Color(0xFF666666);
+        updateStatusText = "v$currentVersion [Проверка...]";
+        updateStatusColor = Colors.grey;
         updateAction = null;
       });
     }
@@ -318,7 +432,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         String latestTag = data['tag_name'] ?? 'v0.0.0';
         String? downloadUrl = data['html_url'];
         
-        // Удаляем любую букву v/V в начале, чтобы корректно сравнить цифры
         String cleanLatest = latestTag.replaceFirst(RegExp(r'[vV]'), '').trim();
         String cleanCurrent = currentVersion.replaceFirst(RegExp(r'[vV]'), '').trim();
 
@@ -327,31 +440,31 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         
         bool isNewer = false;
         for(int i=0; i<3; i++) {
-           if (newParts[i] > currentParts[i]) { isNewer = true; break; }
-           if (newParts[i] < currentParts[i]) { break; }
+           if (newParts.length > i && currentParts.length > i) {
+             if (newParts[i] > currentParts[i]) { isNewer = true; break; }
+             if (newParts[i] < currentParts[i]) { break; }
+           }
         }
 
         if (isNewer && downloadUrl != null) {
            setState(() {
-             updateStatusText = "НОВАЯ ВЕРСИЯ v$cleanLatest ДОСТУПНА! (Нажмите)";
-             updateStatusColor = Colors.red;
+             updateStatusText = "ДОСТУПНА v$cleanLatest! (Нажми)";
+             updateStatusColor = Colors.redAccent;
              updateAction = () => _showUpdateModal(cleanLatest, downloadUrl);
            });
            if (!manualCheck) _showUpdateModal(cleanLatest, downloadUrl);
         } else {
            setState(() {
-             updateStatusText = manualCheck ? "Версия v$currentVersion (У вас самая последняя версия)" : "Версия v$currentVersion (Последняя. Проверить обновление.)";
-             updateStatusColor = manualCheck ? Colors.green.shade800 : const Color(0xFF666666);
+             updateStatusText = manualCheck ? "Версия v$currentVersion (Последняя)" : "v$currentVersion (Обновить?)";
+             updateStatusColor = manualCheck ? Colors.greenAccent : Colors.grey;
              updateAction = () => _manualUpdateCheck();
            });
         }
-      } else {
-         throw Exception("Status code ${response.statusCode}");
       }
     } catch (e) {
       setState(() {
-         updateStatusText = "Версия v$currentVersion [Ошибка проверки. Повторить.]";
-         updateStatusColor = Colors.red;
+         updateStatusText = "Ошибка обновления";
+         updateStatusColor = Colors.redAccent;
          updateAction = () => _manualUpdateCheck();
       });
     }
@@ -363,62 +476,90 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   void _showMiningInfo() {
     showDialog(context: context, builder: (ctx) => AlertDialog(
-      title: const Text("О скорости майнинга", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
-      content: const Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text("Скорость майнинга напрямую зависит от вашего личного баланса монет \$MEE в майнере и общего пула наград."),
-          SizedBox(height: 10),
-          Text("Примерные показатели:", style: TextStyle(fontWeight: FontWeight.bold)),
-          Text("• При 1 000 MEE: ~0.000035 MEE/сек"),
-          Text("• При 100 000 MEE: ~0.003500 MEE/сек"),
-          SizedBox(height: 10),
-          Text("Чем больше монет вы отправили в майнинг, тем выше ваша доля в распределении новых монет."),
-        ],
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.blueAccent)),
+      title: const Row(children: [
+        Text("⛏️ ", style: TextStyle(fontSize: 24)),
+        Text("О скорости", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
+      ]),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Скорость майнинга напрямую зависит от вашего "),
+            const Text("личного баланса монет \$MEE ", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
+            const Text("в майнере и общего пула нагар."),
+            const SizedBox(height: 15),
+            const Text("Примерные показатели:", style: TextStyle(fontWeight: FontWeight.bold, decoration: TextDecoration.underline)),
+            const SizedBox(height: 10),
+            _infoRow("🔹 1 000 MEE", "~0.00000460 MEE/сек"),
+            _infoRow("🔹 10 000 MEE", "~0.00004601 MEE/сек"),
+            _infoRow("🔹 100 000 MEE", "~0.00046007 MEE/сек"),
+            const SizedBox(height: 15),
+            const Text("Чем больше монет вы отправили в майнинг, тем ", style: TextStyle(fontSize: 13)),
+            const Text("выше ваша доля ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+            const Text("в распределении новых монет.", style: TextStyle(fontSize: 13)),
+          ],
+        ),
       ),
+      actionsPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Понятно")),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: TextButton.styleFrom(foregroundColor: Colors.white70, backgroundColor: Colors.white10),
+              child: const Text("Закрыть"),
+            ),
+          ],
+        )
       ],
     ));
   }
 
+  Widget _infoRow(String label, String val) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 13)),
+          Text(val, style: const TextStyle(color: Colors.orangeAccent, fontSize: 13, fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
+  }
+
   void _showAboutProject() {
     showDialog(context: context, builder: (ctx) => AlertDialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      title: const Center(child: Text("🚀 О проекте MEE Miner", style: TextStyle(color: Color(0xFF1E90FF), fontWeight: FontWeight.bold))),
+      backgroundColor: const Color(0xFF1A1A1A),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: Colors.blue)),
+      title: const Center(child: Text("🚀 MEE Miner", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold))),
       content: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: RichText(text: const TextSpan(
+          style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
           children: [
-            RichText(text: const TextSpan(
-              style: TextStyle(color: Colors.black, fontSize: 14),
-              children: [
-                TextSpan(text: "Майнер MEE", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
-                TextSpan(text: " позволяет накапливать монету MEE даже при пополнении баланса майнера на "),
-                TextSpan(text: "1 MEE", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
-                TextSpan(text: ".\n\n"),
-                TextSpan(text: "💡 Бесплатные монеты:\n", style: TextStyle(fontWeight: FontWeight.bold)),
-                TextSpan(text: "Вы можете попросить монету в чате поддержки — вам её пришлют бесплатно! Просто укажите свой кошелек.\n\n"),
-                TextSpan(text: "⚙️ Процесс:\n", style: TextStyle(fontWeight: FontWeight.bold)),
-                TextSpan(text: "После пополнения майнинг запустится автоматически.\n\n"),
-                TextSpan(text: "⚠️ Важно:\n", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
-                TextSpan(text: "Для транзакций нужен "),
-                TextSpan(text: "APT (газ)", style: TextStyle(fontWeight: FontWeight.bold)),
-                TextSpan(text: ". Монета MEE имеет пул на DEX, её можно менять на APT.\n\n"),
-                TextSpan(text: "📈 О монете:\n", style: TextStyle(fontWeight: FontWeight.bold)),
-                TextSpan(text: "MEE — это токен площадки "),
-                TextSpan(text: "MEEIRO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple)),
-                TextSpan(text: ". Мы надеемся на развитие проекта и пользу для сообщества!"),
-              ]
-            )),
-          ],
-        ),
+            TextSpan(text: "Майнер MEE ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+            TextSpan(text: "позволяет накапливать доход даже при минимальном стейкинге в "),
+            TextSpan(text: "1 MEE", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+            TextSpan(text: ".\n\n"),
+            TextSpan(text: "💡 Бесплатные монеты:\n", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+            TextSpan(text: "Напишите в чат поддержки — сообщество часто помогает новичкам монетами для старта!\n\n"),
+            TextSpan(text: "⚠️ Важно:\n", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.redAccent)),
+            TextSpan(text: "Для любых транзакций в сети Aptos необходим "),
+            TextSpan(text: "APT (газ)", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+            TextSpan(text: ".\n\n"),
+            TextSpan(text: "📈 О проекте:\n", style: TextStyle(fontWeight: FontWeight.bold)),
+            TextSpan(text: "MEE — утилитарный токен площадки MEEIRO. Майнинг реализован через официальные смарт-контракты проекта."),
+          ]
+        )),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx),
-          style: TextButton.styleFrom(backgroundColor: const Color(0xFF4CAF50), foregroundColor: Colors.white),
+          style: TextButton.styleFrom(backgroundColor: Colors.blueGrey.shade800, foregroundColor: Colors.white),
           child: const Text("Закрыть"),
         )
       ],
@@ -426,81 +567,148 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _openCustomEditWalletDialog() {
-    TextEditingController controller = TextEditingController(text: currentWalletAddress);
+    final TextEditingController controller = TextEditingController(text: currentWalletAddress);
     showDialog(context: context, builder: (context) {
-      return StatefulBuilder(builder: (context, setDialogState) {
-        return AlertDialog(
-          title: const Text("Сменить кошелек"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text("Введите адрес Aptos (66 симв.):", style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
-              TextField(
-                controller: controller, 
-                decoration: InputDecoration(
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    icon: const Icon(Icons.clear, color: Colors.grey),
-                    onPressed: () { controller.clear(); },
+      return StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: const Text("Сменить кошелек"),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text("Введите адрес Aptos (66 симв.):", style: TextStyle(fontSize: 12)),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: controller, 
+                  style: const TextStyle(fontSize: 12),
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(), 
+                    hintText: "0x...",
+                    suffixIcon: controller.text.isNotEmpty 
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, size: 18), 
+                          onPressed: () { 
+                            controller.clear(); 
+                            setDialogState(() {}); 
+                          }
+                        ) 
+                      : null,
                   ),
+                  onChanged: (val) => setDialogState(() {}),
                 ),
-              ),
-              const SizedBox(height: 10),
-              ElevatedButton(onPressed: () async {
-                ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
-                if (data?.text != null) {
-                  controller.text = data!.text!.trim();
-                }
-              }, child: const Text("Вставить из буфера"))
+                const SizedBox(height: 10),
+                TextButton.icon(onPressed: () async {
+                  ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
+                  if (data?.text != null) {
+                    controller.text = data!.text!.trim();
+                    setDialogState(() {});
+                  }
+                }, icon: const Icon(Icons.paste, size: 16), label: const Text("Вставить"))
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text("Отмена")),
+              ElevatedButton(onPressed: () {
+                 String trimmed = controller.text.trim();
+                 if (trimmed.length == 66 && trimmed.startsWith("0x")) {
+                   setState(() { currentWalletAddress = trimmed; isRunning = false; meeCurrentReward = 0.0; _saveWalletAddress(trimmed); _updateWalletLabelText(); });
+                   _runUpdateThread(); Navigator.pop(context);
+                 }
+              }, child: const Text("Сохранить")),
             ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), style: TextButton.styleFrom(backgroundColor: const Color(0xFFDC143C), foregroundColor: Colors.white), child: const Text("Отмена")),
-            TextButton(onPressed: () {
-               String trimmed = controller.text.trim();
-               if (trimmed.length == 66 && trimmed.startsWith("0x")) {
-                 setState(() { currentWalletAddress = trimmed; isRunning = false; meeCurrentReward = 0.0; _saveWalletAddress(trimmed); _updateWalletLabelText(); });
-                 _runUpdateThread(); Navigator.pop(context);
-               } else { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Ошибка формата!"))); }
-            }, style: TextButton.styleFrom(backgroundColor: const Color(0xFF4CAF50), foregroundColor: Colors.white), child: const Text("Сохранить")),
-          ],
-        );
-      });
+          );
+        }
+      );
     });
   }
 
   void _showUpdateModal(String newVersion, String url) {
     showDialog(context: context, builder: (ctx) => AlertDialog(
-      title: const Text("Доступно обновление!"),
-      content: Text("🎉 Новая версия: v$newVersion!\nВаша: v$currentVersion\nНажмите \"Скачать\" для перехода на GitHub."),
+      title: const Text("Обновление!"),
+      content: Text("Доступна версия v$newVersion. Обновите приложение для стабильной работы."),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Позже")),
-        TextButton(onPressed: () { launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication); Navigator.pop(ctx); },
-          style: TextButton.styleFrom(backgroundColor: const Color(0xFFFFCC00), foregroundColor: Colors.black), child: const Text("Скачать")),
+        ElevatedButton(onPressed: () { launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication); Navigator.pop(ctx); }, child: const Text("Скачать")),
       ],
     ));
   }
 
-Future<void> _showModalAndOpenUrl(String action, String url) async {
-    Map<String, Map<String, String>> instructions = {
+  Future<void> _showModalAndOpenUrl(String action, String url) async {
+    // Подготовка стилей
+    const stepStyle = TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 14);
+    const normalStyle = TextStyle(color: Colors.white70, fontSize: 14, height: 1.5);
+    const highlightStyle = TextStyle(fontWeight: FontWeight.bold, color: Colors.orangeAccent);
+    const italicStyle = TextStyle(fontStyle: FontStyle.italic, color: Colors.grey, fontSize: 13);
+
+    Map<String, dynamic> instructions = {
       "Harvest": {
-        "title": "✅ Контракт скопирован! Harvest.",
-        "text": "1. Подключите кошелек.\n2. Вставьте контракт в T0 и T1.\n3. Нажмите RUN."
+        "title": "✅ Контракт скопирован!",
+        "content": RichText(text: const TextSpan(style: normalStyle, children: [
+          TextSpan(text: "1. В браузере подключите кошелек.\n"),
+          TextSpan(text: "2. Вставьте контракт в поля "),
+          TextSpan(text: "T0", style: highlightStyle),
+          TextSpan(text: " и "),
+          TextSpan(text: "T1", style: highlightStyle),
+          TextSpan(text: ".\n"),
+          TextSpan(text: "3. Нажмите кнопку "),
+          TextSpan(text: "RUN", style: highlightStyle),
+          TextSpan(text: "."),
+        ]))
       },
       "Stake": {
-        "title": "✅ Контракт скопирован! Майнинг.",
-        "text": "1. Подключите кошелек.\n2. Вставьте контракт в T0 и T1.\n3. Введите сумму (1 MEE = 1000000).\n4. Нажмите RUN."
+        "title": "✅ Контракт скопирован!",
+        "content": RichText(text: const TextSpan(style: normalStyle, children: [
+          TextSpan(text: "1. Подключите кошелек.\n"),
+          TextSpan(text: "2. Вставьте контракт в "),
+          TextSpan(text: "T0", style: highlightStyle),
+          TextSpan(text: " и "),
+          TextSpan(text: "T1", style: highlightStyle),
+          TextSpan(text: ".\n"),
+          TextSpan(text: "3. В поле "),
+          TextSpan(text: "arg0", style: highlightStyle),
+          TextSpan(text: " - введите сумму (1 MEE = 1000000).\n"),
+          TextSpan(text: "4. Нажмите "),
+          TextSpan(text: "RUN", style: highlightStyle),
+          TextSpan(text: "."),
+        ]))
       },
       "Unstake": {
-        "title": "⚠️ Вывод из майнинга?",
-        "text": "1. Контракт скопирован! Подключите кошелек.\n"
-                 "2. Вставьте контракт \$MEE в поля T0 и T1.\n"
-                 "3. В поле 'arg0: u64' введите сумму (1 MEE = 1000000).\n"
-                 "4. В поле 'arg1: u8' введите тип вывода:\n"
-                 "   0 — Обычный (15 дней ждать, без комиссии)\n"
-                 "   1 — Мгновенный (комиссия 15%)\n"
-                 "5. Нажмите RUN и подтвердите."
+        "title": "⚠️ Вывод из майнинга",
+        "content": RichText(
+          text: TextSpan(
+            style: normalStyle,
+            children: [
+              const TextSpan(text: "1. Контракт скопирован! ", style: highlightStyle),
+              const TextSpan(text: "Откройте браузер.\n\n"),
+              const TextSpan(text: "2. Вставьте адрес \$MEE в поля ", style: stepStyle),
+              const TextSpan(text: "T0", style: highlightStyle),
+              const TextSpan(text: " и "),
+              const TextSpan(text: "T1", style: highlightStyle),
+              const TextSpan(text: ".\n\n"),
+              const TextSpan(text: "3. В поле ", style: stepStyle),
+              const TextSpan(text: "arg0 (u64)", style: highlightStyle),
+              const TextSpan(text: " укажите сумму:\n"),
+              const TextSpan(text: "   (Пример: 1 MEE = 1000000)\n\n"),
+              const TextSpan(text: "4. В поле ", style: stepStyle),
+              const TextSpan(text: "arg1 (u8)", style: highlightStyle),
+              const TextSpan(text: " выберите режим:\n"),
+              const TextSpan(text: "   • 0 — Обычный ", style: stepStyle),
+              const TextSpan(text: "(15 дней, 0% комиссия)\n"),
+              const TextSpan(text: "   • 1 — Мгновенный ", style: stepStyle),
+              const TextSpan(text: "(комиссия 15%)\n\n"),
+              const TextSpan(text: "5. Нажмите ", style: stepStyle),
+              const TextSpan(text: "RUN", style: highlightStyle),
+              const TextSpan(text: " и подтвержите транзакцию.\n\n"),
+              const TextSpan(text: "──────────────────────\n"),
+              const TextSpan(text: "📌 Важно: ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+              const TextSpan(text: "Если вы выбрали режим «0», то через "),
+              const TextSpan(text: "15 дней ", style: highlightStyle),
+              const TextSpan(text: "вам необходимо будет использовать функцию "),
+              const TextSpan(text: "withdraw", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent, decoration: TextDecoration.underline)),
+              const TextSpan(text: ", чтобы монеты вернулись на кошелек.", style: italicStyle),
+            ],
+          ),
+        )
       }
     };
     
@@ -510,13 +718,15 @@ Future<void> _showModalAndOpenUrl(String action, String url) async {
     bool? result = await showDialog<bool>(
       context: context, 
       builder: (ctx) => AlertDialog(
-        title: Text(data["title"]!, style: const TextStyle(color: Color(0xFF1E90FF), fontWeight: FontWeight.bold)),
-        content: Text(data["text"]!),
+        backgroundColor: const Color(0xFF1A1A1A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: BorderSide(color: action == "Unstake" ? Colors.redAccent : Colors.blueAccent)),
+        title: Text(data["title"]!, style: TextStyle(color: action == "Unstake" ? Colors.redAccent : Colors.blueAccent, fontWeight: FontWeight.bold)),
+        content: SingleChildScrollView(child: data["content"]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Отмена")),
-          TextButton(
+          ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true), 
-            style: TextButton.styleFrom(backgroundColor: const Color(0xFF4CAF50), foregroundColor: Colors.white), 
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700),
             child: const Text("Открыть браузер")
           )
         ],
@@ -526,8 +736,8 @@ Future<void> _showModalAndOpenUrl(String action, String url) async {
   }
 
   Widget _buildSection({required Color bg, required Color borderColor, required Widget child}) {
-    return Container(width: double.infinity, margin: const EdgeInsets.symmetric(vertical: 5), padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: bg, border: Border.all(color: borderColor, width: 1)), child: child);
+    return Container(width: double.infinity, margin: const EdgeInsets.symmetric(vertical: 6), padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8), border: Border.all(color: borderColor, width: 1.5)), child: child);
   }
 
   @override
@@ -535,119 +745,131 @@ Future<void> _showModalAndOpenUrl(String action, String url) async {
     return Scaffold(
       body: SafeArea(
         child: RefreshIndicator(
-          onRefresh: () async {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Обновление данных..."), duration: Duration(seconds: 1)));
-            await _runUpdateThread();
+          onRefresh: () async { 
+             ScaffoldMessenger.of(context).showSnackBar(
+               const SnackBar(content: Text("Обновление данных..."), duration: Duration(milliseconds: 800))
+             );
+             await _runUpdateThread(); 
           },
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.all(12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Padding(
-                  padding: EdgeInsets.only(bottom: 15),
-                  child: Text("МАЙНИНГ МОНЕТЫ \$MEE (APTOS)", 
+                  padding: EdgeInsets.symmetric(vertical: 10),
+                  child: Text("МАЙНИНГ \$MEE (APTOS)", 
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0xFF1E90FF), fontSize: 18, fontWeight: FontWeight.bold)),
+                    style: TextStyle(color: Colors.blueAccent, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
                 ),
                 _buildSection(
-                  bg: const Color(0xFFF0F0F0),
-                  borderColor: Colors.black,
+                  bg: const Color(0xFF1E1E1E),
+                  borderColor: Colors.grey.shade800,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(walletLabelText, style: TextStyle(fontSize: 14, color: walletLabelColor)),
-                      const SizedBox(height: 5),
-                      Text(onChainBalancesText, style: const TextStyle(fontSize: 12, color: Color(0xFF555555))),
-                      const SizedBox(height: 5),
-                      SizedBox(width: double.infinity, child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.black, elevation: 1),
-                        onPressed: _openCustomEditWalletDialog, child: const Text("Сменить кошелек"),
+                      Text(walletLabelText, style: TextStyle(fontSize: 14, color: walletLabelColor, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 6),
+                      Text(onChainBalancesText, style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                      const SizedBox(height: 8),
+                      SizedBox(width: double.infinity, height: 35, child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey.shade900, foregroundColor: Colors.white),
+                        onPressed: _openCustomEditWalletDialog, child: const Text("Сменить кошелек", style: TextStyle(fontSize: 12)),
                       ))
                     ],
                   )
                 ),
                 _buildSection(
-                  bg: const Color(0xFFE6F7FF),
-                  borderColor: const Color(0xFF8AC0E6),
+                  bg: const Color(0xFF0D2335),
+                  borderColor: Colors.blue.shade900,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                       const Text("Баланс майнинга \$MEE:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                       const SizedBox(height: 5),
+                       const Text("Баланс майнинга:", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13)),
                        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                           Expanded(child: Text(meeBalanceText, style: const TextStyle(fontSize: 16))),
+                           Expanded(child: Text(meeBalanceText, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500))),
                            ElevatedButton(onPressed: () => _showModalAndOpenUrl("Stake", addMeeUrl),
-                             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E90FF), foregroundColor: Colors.white), child: const Text("В майнинг"))
+                             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700), child: const Text("Добавить", style: TextStyle(fontSize: 12)))
                        ])
                     ],
                   )
                 ),
                 _buildSection(
-                  bg: const Color(0xFFE6FFE6),
-                  borderColor: const Color(0xFF00CC00),
+                  bg: const Color(0xFF0D2B1A),
+                  borderColor: Colors.green.shade900,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(children: [
-                        const Text("Награда (harvest):", style: TextStyle(fontWeight: FontWeight.bold)),
-                        const SizedBox(width: 5),
-                        Text(rewardTickerText, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
+                        const Text("Доступно к сбору:", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                        const SizedBox(width: 8),
+                        Text(rewardTickerText),
                       ]),
-                      const SizedBox(height: 5),
+                      const SizedBox(height: 4),
                       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                         Expanded(child: Text(meeRewardText, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.green))),
+                         Expanded(child: Text(meeRewardText, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.greenAccent))),
                          ElevatedButton(onPressed: () => _showModalAndOpenUrl("Harvest", harvestBaseUrl),
-                           style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4CAF50), foregroundColor: Colors.white), child: const Text("Забрать награду"))
+                           style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700), child: const Text("Забрать", style: TextStyle(fontSize: 12)))
                       ]),
-                      const SizedBox(height: 5),
+                      const SizedBox(height: 6),
                       Row(children: [
-                        Text(meeRateText, style: const TextStyle(fontSize: 12, color: Color(0xFF666666))),
-                        const SizedBox(width: 5),
-                        GestureDetector(onTap: _showMiningInfo, child: const Icon(Icons.help_outline, size: 16, color: Colors.blue)),
+                        Text(meeRateText, style: const TextStyle(fontSize: 11, color: Colors.white60)),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 44, height: 44,
+                          child: IconButton(
+                            padding: EdgeInsets.zero,
+                            onPressed: _showMiningInfo, 
+                            icon: Container(
+                              width: 38, height: 38,
+                              decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.blueAccent, width: 2)),
+                              child: const Center(child: Text("?", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 20))),
+                            ),
+                          ),
+                        ),
                       ]),
                     ],
                   )
                 ),
                 _buildSection(
-                  bg: const Color(0xFFFFE6E6),
-                  borderColor: const Color(0xFFFF9999),
+                  bg: const Color(0xFF331111),
+                  borderColor: Colors.red.shade900,
                   child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    const Expanded(child: Text("Вывод \$MEE из майнинга:", style: TextStyle(fontWeight: FontWeight.bold))),
+                    const Text("Вывод средств:", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
                     ElevatedButton(onPressed: () => _showModalAndOpenUrl("Unstake", unstakeBaseUrl),
-                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC143C), foregroundColor: Colors.white), child: const Text("Забрать \$MEE"))
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900), child: const Text("Забрать \$MEE"))
                   ])
                 ),
                 _buildSection(
-                  bg: const Color(0xFFF9F9F9),
+                  bg: const Color(0xFF1A1A1A),
                   borderColor: Colors.black,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text("Контракт \$MEE:", style: TextStyle(fontSize: 12, color: Color(0xFF888888))),
-                      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                         Expanded(child: Text(meeCoinT0T1, style: const TextStyle(fontSize: 10))),
-                         TextButton(onPressed: () { Clipboard.setData(const ClipboardData(text: meeCoinT0T1)); 
-                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Контракт скопирован!"))); }, child: const Text("Копировать"))
-                      ])
-                    ],
-                  )
+                  child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                    const Text("Контракт \$MEE", style: TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.bold)),
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.copy, size: 14),
+                      onPressed: () { 
+                        Clipboard.setData(const ClipboardData(text: meeCoinT0T1)); 
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Контракт скопирован!"))); 
+                      }, 
+                      label: const Text("Копировать"),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.grey.shade900, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 12)),
+                    )
+                  ])
                 ),
                 GridView.count(
                   crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), childAspectRatio: 3.5,
                   children: [
                     _linkBtn("Исходный код", urlSource),
-                    _linkBtn("Сайт", urlSite),
                     _linkBtn("График \$MEE", urlGraph),
                     _actionBtn("О проекте", _showAboutProject),
                     _linkBtn("Обмен \$MEE/APT", urlSwapEarnium),
                     _linkBtn("Чат поддержки", urlSupport),
                   ],
                 ),
-                const SizedBox(height: 10),
-                GestureDetector(onTap: updateAction, child: Text(updateStatusText, textAlign: TextAlign.right,
-                   style: TextStyle(color: updateStatusColor, fontSize: 12, fontWeight: updateStatusColor == Colors.red ? FontWeight.bold : FontWeight.normal))),
+                const SizedBox(height: 12),
+                GestureDetector(onTap: updateAction, child: Text(updateStatusText, textAlign: TextAlign.center,
+                   style: TextStyle(color: updateStatusColor, fontSize: 11, fontWeight: FontWeight.bold))),
                 const SizedBox(height: 20),
               ],
             ),
@@ -660,7 +882,7 @@ Future<void> _showModalAndOpenUrl(String action, String url) async {
   Widget _linkBtn(String text, String url) {
     return Container(margin: const EdgeInsets.all(4), child: ElevatedButton(
         onPressed: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
-        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFFFACD), foregroundColor: const Color(0xFF333333), side: const BorderSide(color: Color(0xFFFFCC00)), padding: EdgeInsets.zero),
+        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2C2C2C), foregroundColor: Colors.orangeAccent, side: const BorderSide(color: Colors.orangeAccent), padding: EdgeInsets.zero),
         child: Text(text, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
     ));
   }
@@ -668,7 +890,7 @@ Future<void> _showModalAndOpenUrl(String action, String url) async {
   Widget _actionBtn(String text, VoidCallback action) {
     return Container(margin: const EdgeInsets.all(4), child: ElevatedButton(
         onPressed: action,
-        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE0F7FA), foregroundColor: const Color(0xFF006064), side: const BorderSide(color: Colors.cyan), padding: EdgeInsets.zero),
+        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E1E1E), foregroundColor: Colors.cyanAccent, side: const BorderSide(color: Colors.cyanAccent), padding: EdgeInsets.zero),
         child: Text(text, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
     ));
   }
