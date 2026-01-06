@@ -8,7 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'dart:math'; // Добавлено для pow
 
 // --- КОНСТАНТЫ ПРИЛОЖЕНИЯ И ВЕРСИИ ---
-const String currentVersion = "1.0.5"; 
+const String currentVersion = "1.0.6"; 
 const String urlGithubApi = "https://api.github.com/repos/pavekscb/m/releases/latest";
 
 const String walletKey = "WALLET_ADDRESS"; 
@@ -312,7 +312,7 @@ void _showMegaEventDialog() {
 
           return AlertDialog(
             backgroundColor: const Color(0xFF1A1A1A),
-            insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24), // Немного увеличиваем отступы от краев экрана
+            insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
               side: const BorderSide(color: Colors.purpleAccent, width: 1.5),
@@ -332,7 +332,6 @@ void _showMegaEventDialog() {
             ),
             content: SizedBox(
               width: double.maxFinite,
-              // Оборачиваем в SingleChildScrollView, чтобы текст влез при любой высоте
               child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -357,7 +356,6 @@ void _showMegaEventDialog() {
                       ),
                     ),
                     const SizedBox(height: 20),
-                    // Вставляем ваш расширенный текст
                     RichText(
                       textAlign: TextAlign.center,
                       text: TextSpan(
@@ -402,10 +400,15 @@ void _showMegaEventDialog() {
                   const SizedBox(height: 8),
                   ElevatedButton(
                     onPressed: () async {
-                      const String url = "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest?network=mainnet";
+                      const String urlPath = "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest?network=mainnet";
+                      final Uri url = Uri.parse(urlPath);
                       Navigator.pop(context);
-                      if (await canLaunchUrl(Uri.parse(url))) {
-                        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                      try {
+                        await launchUrl(url, mode: LaunchMode.externalApplication);
+                      } catch (e) {
+                        if (await canLaunchUrl(url)) {
+                          await launchUrl(url, mode: LaunchMode.platformDefault);
+                        }
                       }
                     },
                     style: ElevatedButton.styleFrom(
@@ -416,6 +419,25 @@ void _showMegaEventDialog() {
                     ),
                     child: const Text("ЗАБРАТЬ \$MEGA", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   ),
+                  const SizedBox(height: 16),
+                  GestureDetector(
+                    onTap: () async {
+                      const String urlPath = "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest?network=mainnet";
+                      final Uri url = Uri.parse(urlPath);
+                      if (!await launchUrl(url, mode: LaunchMode.platformDefault)) {
+                        await launchUrl(url, mode: LaunchMode.externalApplication);
+                      }
+                    },
+                    child: const Text(
+                      "Проблема с кнопкой? Нажми здесь",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.cyanAccent,
+                        fontSize: 13,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -425,10 +447,6 @@ void _showMegaEventDialog() {
     },
   );
 }
-
-
-
-
 
 
 
