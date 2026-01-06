@@ -8,7 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'dart:math'; // Добавлено для pow
 
 // --- КОНСТАНТЫ ПРИЛОЖЕНИЯ И ВЕРСИИ ---
-const String currentVersion = "1.0.4"; 
+const String currentVersion = "1.0.5"; 
 const String urlGithubApi = "https://api.github.com/repos/pavekscb/m/releases/latest";
 
 const String walletKey = "WALLET_ADDRESS"; 
@@ -22,6 +22,7 @@ const int updateIntervalSeconds = 60;
 
 const String meeCoinT0T1 = "0xe9c192ff55cffab3963c695cff6dbf9dad6aff2bb5ac19a6415cad26a81860d9::mee_coin::MeeCoin";
 const String aptCoinType = "0x1::aptos_coin::AptosCoin";
+const String megaCoinType = "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3::mega_coin::MEGA";
 
 const String aptLedgerUrl = "https://fullnode.mainnet.aptoslabs.com/v1";
 const String harvestBaseUrl = "https://explorer.aptoslabs.com/account/0x514cfb77665f99a2e4c65a5614039c66d13e00e98daf4c86305651d29fd953e5/modules/run/Staking/harvest?network=mainnet";
@@ -67,6 +68,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   String currentWalletAddress = defaultExampleAddress;
   double meeCurrentReward = 0.0;
+  double megaOnChain = 0.0;
   double meeRatePerSec = 0.0;
   int countdownVal = updateIntervalSeconds;
   bool isRunning = false;
@@ -152,10 +154,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     String displayAddress = "${currentWalletAddress.substring(0, 6)}...${currentWalletAddress.substring(currentWalletAddress.length - 4)}";
     if (currentWalletAddress == defaultExampleAddress) {
       walletLabelText = "Кошелек: $displayAddress (Смените на свой!)";
-      walletLabelColor = Colors.orangeAccent;
+      walletLabelColor = Colors.green[400]!;
     } else {
       walletLabelText = "Кошелек: $displayAddress";
-      walletLabelColor = Colors.purpleAccent;
+      walletLabelColor = Colors.greenAccent;
     }
   }
 
@@ -224,50 +226,238 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       // Вычисляем цену MEE в USD: (APT reserve / MEE reserve) * priceApt
       if (meeReserveNorm > 0) {
         double priceMeeInApt = aptReserveNorm / meeReserveNorm;
-        priceMee = ((priceMeeInApt * priceApt) / 100)* 0.997;
+        // priceMee = ((priceMeeInApt * priceApt) / 100)* 0.997;
+        priceMee = priceMeeInApt * priceApt;
       } else {
         priceMee = 0.0;
       }
     } catch (e) {
-      debugPrint("Price calculation error: $e");
+      // debugPrint("Price calculation error: $e");
       priceApt = 0.0;
       priceMee = 0.0;
     }
   }
 
   Future<int> _getRawBalance(String coinType) async {
-    try {
-      final url = Uri.parse("$aptLedgerUrl/accounts/$currentWalletAddress/balance/$coinType");
-      final headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json',
-      };
-      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
-      if (response.statusCode == 200) return int.parse(response.body);
-    } catch (e) {
-      debugPrint("Balance fetch error: $e");
+  try {
+    final encodedCoinType = Uri.encodeComponent(coinType);  // Кодируем :: как %3A%3A и другие символы
+    final url = Uri.parse("$aptLedgerUrl/accounts/$currentWalletAddress/balance/$encodedCoinType");
+    final headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      // 'Accept' можно оставить как '*/*' или удалить вовсе — API возвращает text/plain
+      'Accept': '*/*',
+    };
+    // debugPrint("Balance URL: $url");  // Для отладки: проверьте в консоли, что URL с %3A%3A
+    final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
+    if (response.statusCode == 200) {
+      return int.parse(response.body.trim());  // trim() убирает пробелы или \n
+    } else {
+      // debugPrint("Balance fetch error: ${response.statusCode} - ${response.body}");
+      return 0;
     }
+  } catch (e) {
+    // debugPrint("Balance fetch error: $e");
     return 0;
   }
 
+}
+
+
+
+
+
+
+
+
+void _showMegaEventDialog() {
+  // Константы строго из вашего JS скрипта
+  const int startTimeSeconds = 1767623400; // 5 Jan 2026
+  const int endTimeSeconds = 1795075200;   // 19 Nov 2026
+  const double startPrice = 0.001;         // 100000 / 1e8
+  const double endPrice = 0.1;             // 10000000 / 1e8
+
+  showDialog(
+    context: context,
+    builder: (BuildContext context) {
+      return StatefulBuilder(
+        builder: (context, setState) {
+          Timer.periodic(const Duration(seconds: 1), (timer) {
+            if (context.mounted) setState(() {}); else timer.cancel();
+          });
+
+          final int nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+          // 1. Расчет времени (обратный отсчет)
+          final int diff = endTimeSeconds - nowSeconds;
+          String timeLeft;
+          if (diff <= 0) {
+            timeLeft = "Событие началось!";
+          } else {
+            int d = diff ~/ 86400;
+            int h = (diff % 86400) ~/ 3600;
+            int m = (diff % 3600) ~/ 60;
+            int s = diff % 60;
+            timeLeft = "$dд : $hч : $mм : $sс";
+          }
+
+          // 2. Расчет цены (строго по алгоритму JS)
+          double currentPrice;
+          if (nowSeconds >= endTimeSeconds) {
+            currentPrice = endPrice;
+          } else if (nowSeconds <= startTimeSeconds) {
+            currentPrice = startPrice;
+          } else {
+            currentPrice = startPrice + (endPrice - startPrice) * (nowSeconds - startTimeSeconds) / (endTimeSeconds - startTimeSeconds);
+          }
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A1A),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24), // Немного увеличиваем отступы от краев экрана
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Colors.purpleAccent, width: 1.5),
+            ),
+            title: Column(
+              children: [
+                const Text(
+                  "🚀 MEGA EVENT: GTA 6",
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.purpleAccent),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  timeLeft,
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.orangeAccent, fontFamily: 'Courier'),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              // Оборачиваем в SingleChildScrollView, чтобы текст влез при любой высоте
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 20),
+                      decoration: BoxDecoration(
+                        color: Colors.black26,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.cyanAccent.withOpacity(0.3)),
+                      ),
+                      child: Column(
+                        children: [
+                          const Text("ТЕКУЩАЯ ЦЕНА:", style: TextStyle(color: Colors.cyanAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 4),
+                          Text(
+                            "${currentPrice.toStringAsFixed(6)} APT",
+                            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    // Вставляем ваш расширенный текст
+                    RichText(
+                      textAlign: TextAlign.center,
+                      text: TextSpan(
+                        style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.5),
+                        children: [
+                          const TextSpan(text: "Цена растет каждую секунду! Успей забрать "),
+                          const TextSpan(text: "\$MEGA", style: TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold)),
+                          const TextSpan(text: " до 19 ноября 2026 года.\n\n"),
+                          const TextSpan(text: "🔥 Нажмите ", style: TextStyle(color: Colors.orangeAccent)),
+                          const TextSpan(text: "ЗАБРАТЬ \$MEGA", style: TextStyle(fontWeight: FontWeight.bold)),
+                          const TextSpan(text: ", мгновенно подключите кошелек "),
+                          const TextSpan(text: "Petra", style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+                          const TextSpan(text: ", жмите "),
+                          const TextSpan(text: "⚡RUN", style: TextStyle(color: Colors.yellowAccent, fontWeight: FontWeight.bold)),
+                          const TextSpan(text: " и подтвердите транзакцию.\n\n"),
+                          const TextSpan(text: "✨ Поздравляем! ", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                          const TextSpan(text: "Теперь вы — "),
+                          const TextSpan(text: "ранний холдер ", style: TextStyle(fontStyle: FontStyle.italic)),
+                          const TextSpan(text: "эксклюзивной монеты "),
+                          const TextSpan(text: "\$MEGA! 💎\n\n", style: TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold)),
+                          const TextSpan(
+                            text: "⚠️ Важно: убедитесь, что на балансе есть немного APT для оплаты газа.",
+                            style: TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            actions: [
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text("Отмена", style: TextStyle(color: Colors.white70, fontSize: 16)),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton(
+                    onPressed: () async {
+                      const String url = "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest?network=mainnet";
+                      Navigator.pop(context);
+                      if (await canLaunchUrl(Uri.parse(url))) {
+                        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.greenAccent.shade700,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text("ЗАБРАТЬ \$MEGA", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+
+
+
+
+
+
   Future<int> _getCoinDecimals(String coinType) async {
-    try {
-      String moduleAddress = coinType.split("::")[0];
-      final url = Uri.parse("$aptLedgerUrl/accounts/$moduleAddress/resource/0x1::coin::CoinInfo<$coinType>");
-      final headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json',
-      };
-      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        return int.parse(data["data"]["decimals"]);
+  try {
+    String moduleAddress = coinType.split("::")[0];
+    final url = Uri.parse("$aptLedgerUrl/accounts/$moduleAddress/resource/0x1::coin::CoinInfo<$coinType>");
+    final headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Accept': '*/*', 
+    };
+    final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      final decimalsValue = data["data"]["decimals"];  // Может быть int или String
+      if (decimalsValue is int) {
+        return decimalsValue;  // Уже int — просто верните
+      } else if (decimalsValue is String) {
+        return int.parse(decimalsValue);  // Если String — парсите
+      } else {
+        // debugPrint("Unexpected decimals type: ${decimalsValue.runtimeType}");
+        return 8;  // Fallback
       }
-    } catch (e) {
-      debugPrint("Decimals fetch error: $e");
     }
-    return 8;
+  } catch (e) {
+    // debugPrint("Decimals fetch error: $e");
   }
+  return 8;  // Дефолт на 8, как в вашем коде
+}
 
   Future<int?> _fetchLedgerTimestamp() async {
     try {
@@ -281,7 +471,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         return int.parse(data["ledger_timestamp"]) ~/ 1000000;
       }
     } catch (e) {
-      debugPrint("Timestamp fetch error: $e");
+      // debugPrint("Timestamp fetch error: $e");
     }
     return null;
   }
@@ -299,7 +489,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       }
       if (response.statusCode == 200) return json.decode(response.body)["data"];
     } catch (e) {
-      debugPrint("Data fetch error: $e");
+      // debugPrint("Data fetch error: $e");
     }
     return null;
   }
@@ -312,7 +502,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       aptVal = aptRaw / 1e8;
       int meeDec = await _getCoinDecimals(meeCoinT0T1);
       int meeRaw = await _getRawBalance(meeCoinT0T1);
-      meeVal = (meeRaw * rawDataCorrectionFactor) / (BigInt.from(10).pow(meeDec).toDouble());
+      // meeVal = (meeRaw * rawDataCorrectionFactor) / (BigInt.from(10).pow(meeDec).toDouble());
+      meeVal = meeRaw / pow(10, meeDec);
+      
+      int megaDec = await _getCoinDecimals(megaCoinType);
+      int megaRaw = await _getRawBalance(megaCoinType);
+      double megaVal = megaRaw / pow(10, megaDec);
+      megaOnChain = megaVal;
+
+      // debugPrint("Mega raw balance: $megaRaw");
+
+
     } catch (e) {}
 
     if (currentWalletAddress.length != 66 || !currentWalletAddress.startsWith("0x")) {
@@ -389,8 +589,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       double meeTotalUsd = meeOnChain * priceMee;
 
       // Вывод в формате: APT: 1.23 ($10.0 / $12.3) | MEE: 100.0 ($0.0019 / $0.19)
-      onChainBalancesText = "APT: ${aptOnChain.toStringAsFixed(4)} (\$$priceApt / \$${aptTotalUsd.toStringAsFixed(4)}) | MEE: ${meeOnChain.toStringAsFixed(2)} (\$${priceMee.toStringAsFixed(6)} / \$${meeTotalUsd.toStringAsFixed(4)})";
+      onChainBalancesText = "APT: ${aptOnChain.toStringAsFixed(8)} (\$$priceApt / \$${aptTotalUsd.toStringAsFixed(4)}) | MEE: ${meeOnChain.toStringAsFixed(6)} (\$${priceMee.toStringAsFixed(6)} / \$${meeTotalUsd.toStringAsFixed(6)})  | MEGA: ${megaOnChain.toStringAsFixed(2)}   ";
+
+    
+
       
+
       if (balance == null || reward == null) {
         meeBalanceText = "Ошибка сети!";
         meeRewardText = "Ошибка!";
@@ -414,7 +618,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   void _updateRewardLabelsOnly() {
     String rewardUsd = (meeCurrentReward * priceMee).toStringAsFixed(6);
-    meeRewardText = "${meeCurrentReward.toStringAsFixed(8)} \$MEE (\$$rewardUsd)".replaceAll(".", ",");
+    // meeRewardText = "${meeCurrentReward.toStringAsFixed(8)} \$MEE (\$$rewardUsd)".replaceAll(".", ",");
+    meeRewardText = "${meeCurrentReward.toStringAsFixed(8)} \$MEE ".replaceAll(".", ",");
   }
 
   Future<void> _checkUpdates({required bool manualCheck}) async {
@@ -493,9 +698,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             const SizedBox(height: 15),
             const Text("Примерные показатели:", style: TextStyle(fontWeight: FontWeight.bold, decoration: TextDecoration.underline)),
             const SizedBox(height: 10),
-            _infoRow("🔹 1 000 MEE", "~0.00000460 MEE/сек"),
-            _infoRow("🔹 10 000 MEE", "~0.00004601 MEE/сек"),
-            _infoRow("🔹 100 000 MEE", "~0.00046007 MEE/сек"),
+            _infoRow("🔹 1 000 MEE", "~0.000004 MEE/с"),
+            _infoRow("🔹 10 000 MEE", "~0.00004 MEE/с"),
+            _infoRow("🔹 100 000 MEE", "~0.0004 MEE/с"),
             const SizedBox(height: 15),
             const Text("Чем больше монет вы отправили в майнинг, тем ", style: TextStyle(fontSize: 13)),
             const Text("выше ваша доля ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent)),
@@ -771,7 +976,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     children: [
                       Text(walletLabelText, style: TextStyle(fontSize: 14, color: walletLabelColor, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 6),
-                      Text(onChainBalancesText, style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                      Text(onChainBalancesText, style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w500)),
+                      
+ 
+
+                    
+
+
                       const SizedBox(height: 8),
                       SizedBox(width: double.infinity, height: 35, child: ElevatedButton(
                         style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey.shade900, foregroundColor: Colors.white),
@@ -841,22 +1052,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900), child: const Text("Забрать \$MEE"))
                   ])
                 ),
-                _buildSection(
-                  bg: const Color(0xFF1A1A1A),
-                  borderColor: Colors.black,
-                  child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    const Text("Контракт \$MEE", style: TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.bold)),
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.copy, size: 14),
-                      onPressed: () { 
-                        Clipboard.setData(const ClipboardData(text: meeCoinT0T1)); 
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Контракт скопирован!"))); 
-                      }, 
-                      label: const Text("Копировать"),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.grey.shade900, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 12)),
-                    )
-                  ])
+
+                // GTA
+                GestureDetector(
+                  onTap: _showMegaEventDialog,
+                  child: Center(
+                    child: Image.asset(
+                      'assets/GTA.gif',
+                      width: double.infinity,
+                      height: null,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
                 ),
+                  
+
+
+
+
+
+
+
+
+
+
+          
+               
                 GridView.count(
                   crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), childAspectRatio: 3.5,
                   children: [
