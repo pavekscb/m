@@ -1,4 +1,4 @@
-name: meeiro
+name: mee
 description: "A new Flutter project."
 publish_to: 'none'
 
@@ -32,3 +32,6 @@ flutter_launcher_icons:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/GTA.gif                 
