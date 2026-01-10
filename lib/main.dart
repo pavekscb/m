@@ -6,9 +6,10 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:math'; // Добавлено для pow
+import 'dart:math' as math;
 
 // --- КОНСТАНТЫ ПРИЛОЖЕНИЯ И ВЕРСИИ ---
-const String currentVersion = "1.0.6"; 
+const String currentVersion = "1.0.7"; 
 const String urlGithubApi = "https://api.github.com/repos/pavekscb/m/releases/latest";
 
 const String walletKey = "WALLET_ADDRESS"; 
@@ -31,7 +32,7 @@ const String unstakeBaseUrl = "https://explorer.aptoslabs.com/account/0x514cfb77
 
 // КОНСТАНТЫ: Ссылки для кнопок
 const String urlSource = "https://github.com/pavekscb/m";
-const String urlGraph = "https://dexscreener.com/aptos/pcs-167";
+// const String urlGraph = "https://dexscreener.com/aptos/pcs-167";
 const String urlSwapEarnium = "https://app.panora.exchange/?ref=V94RDWEH#/swap/aptos?pair=MEE-APT";
 const String urlSupport = "https://t.me/cripto_karta";
 
@@ -73,6 +74,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   int countdownVal = updateIntervalSeconds;
   bool isRunning = false;
   
+  double aptOnChain = 0.0;
+  double meeOnChain = 0.0;
+
   double priceApt = 0.0;
   double priceMee = 0.0;
 
@@ -238,6 +242,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
+double _getMegaCurrentPrice() {
+  const int startTimeSeconds = 1767623400; // 5 Jan 2026
+  const int endTimeSeconds = 1795075200;   // 19 Nov 2026
+  const double startPrice = 0.001;
+  const double endPrice = 0.1;
+  final int nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  if (nowSeconds >= endTimeSeconds) return endPrice;
+  if (nowSeconds <= startTimeSeconds) return startPrice;
+  return startPrice + (endPrice - startPrice) * (nowSeconds - startTimeSeconds) / (endTimeSeconds - startTimeSeconds);
+}
+
+
+
   Future<int> _getRawBalance(String coinType) async {
   try {
     final encodedCoinType = Uri.encodeComponent(coinType);  // Кодируем :: как %3A%3A и другие символы
@@ -321,12 +338,12 @@ void _showMegaEventDialog() {
               children: [
                 const Text(
                   "🚀 MEGA EVENT: GTA 6",
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.purpleAccent),
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.cyanAccent),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 4),
                 Text(
                   timeLeft,
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.orangeAccent, fontFamily: 'Courier'),
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.orangeAccent, fontFamily: 'Courier'),
                 ),
               ],
             ),
@@ -346,14 +363,32 @@ void _showMegaEventDialog() {
                       ),
                       child: Column(
                         children: [
-                          const Text("ТЕКУЩАЯ ЦЕНА:", style: TextStyle(color: Colors.cyanAccent, fontSize: 12, fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 4),
+                          const Text("ТЕКУЩАЯ ЦЕНА:", style: TextStyle(color: Colors.cyanAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 2),
                           Text(
                             "${currentPrice.toStringAsFixed(6)} APT",
-                            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                          // Добавляем небольшой отступ и ваш новый текст ниже
+                          const SizedBox(height: 4), 
+                          const Text(
+                            "Цель: 0.1 APT (19.11.2026)",
+                            style: TextStyle(
+                              color: Colors.white70, // Сделаем чуть приглушенным, чтобы выделить текущую цену
+                              fontSize: 11, 
+                              fontWeight: FontWeight.w400
+                            ),
                           ),
                         ],
                       ),
+                    ),
+                    const SizedBox(height: 20),
+                    // ХОЛСТ:
+                    StatefulBuilder(
+                      builder: (context, setState) {
+                         return _AnimatedMegaChart(currentPrice: _getMegaCurrentPrice());
+                        // return _AnimatedMegaChart(currentPrice: 0.05); // тест
+                      },
                     ),
                     const SizedBox(height: 20),
                     RichText(
@@ -369,7 +404,7 @@ void _showMegaEventDialog() {
                           const TextSpan(text: ", мгновенно подключите кошелек "),
                           const TextSpan(text: "Petra", style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
                           const TextSpan(text: ", жмите "),
-                          const TextSpan(text: "⚡RUN", style: TextStyle(color: Colors.yellowAccent, fontWeight: FontWeight.bold)),
+                          const TextSpan(text: "⚡EXECUTE", style: TextStyle(color: Colors.yellowAccent, fontWeight: FontWeight.bold)),
                           const TextSpan(text: " и подтвердите транзакцию.\n\n"),
                           const TextSpan(text: "✨ Поздравляем! ", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
                           const TextSpan(text: "Теперь вы — "),
@@ -447,6 +482,9 @@ void _showMegaEventDialog() {
     },
   );
 }
+
+
+
 
 
 
@@ -600,44 +638,56 @@ void _showMegaEventDialog() {
     _updateUI(stakeBalance, totalRewardFloat, meeRate, aptVal, meeVal);
   }
 
-  void _updateUI(double? balance, double? reward, double rate, double aptOnChain, double meeOnChain) {
-    if (!mounted) return;
-    setState(() {
-      double aptTotalUsd = aptOnChain * priceApt;
-      double meeTotalUsd = meeOnChain * priceMee;
 
-      // Вывод в формате: APT: 1.23 ($10.0 / $12.3) | MEE: 100.0 ($0.0019 / $0.19)
-      onChainBalancesText = "APT: ${aptOnChain.toStringAsFixed(8)} (\$$priceApt / \$${aptTotalUsd.toStringAsFixed(4)}) | MEE: ${meeOnChain.toStringAsFixed(6)} (\$${priceMee.toStringAsFixed(6)} / \$${meeTotalUsd.toStringAsFixed(6)})  | MEGA: ${megaOnChain.toStringAsFixed(2)}   ";
 
+
+
+
+
+
+void _updateUI(double? balance, double? reward, double rate, double aptVal, double meeVal) {
+  if (!mounted) return;
+  setState(() {
+    // Присваиваем входящие значения (aptVal и meeVal) переменным класса
+    // Теперь переменные aptOnChain и meeOnChain обновятся и будут видны в build
+    aptOnChain = aptVal;
+    meeOnChain = meeVal;
+
+    // Расчеты для MEGA (оставляем, чтобы данные были актуальны)
+    double megaPriceInApt = _getMegaCurrentPrice(); 
+    double megaPriceInUsd = megaPriceInApt * priceApt;
+    double megaTotalUsd = megaOnChain * megaPriceInUsd;
     
+    // onChainBalancesText больше не нужен для вывода, 
+    // так как мы используем Text.rich напрямую в build
 
-      
-
-      if (balance == null || reward == null) {
-        meeBalanceText = "Ошибка сети!";
-        meeRewardText = "Ошибка!";
-        meeRateText = "Скорость: Ошибка";
-        rewardTickerText = "[ОШИБКА]";
-        isRunning = false;
-        return;
-      }
-      meeRatePerSec = rate;
-      meeCurrentReward = reward;
-      
-      String balUsd = (balance * priceMee).toStringAsFixed(6);
-      meeBalanceText = "${balance.toStringAsFixed(2)} \$MEE (\$$balUsd)".replaceAll(".", ",");
-      
-      meeRateText = "Скорость: ${meeRatePerSec.toStringAsFixed(10)} MEE/сек".replaceAll(".", ",");
-      _updateRewardLabelsOnly();
-      isRunning = true;
-      countdownVal = updateIntervalSeconds;
-    });
-  }
+    if (balance == null || reward == null) {
+      meeBalanceText = "Ошибка сети!";
+      meeRewardText = "Ошибка!";
+      meeRateText = "Скорость: Ошибка";
+      rewardTickerText = "[ОШИБКА]";
+      isRunning = false;
+      return;
+    }
+    
+    meeRatePerSec = rate;
+    meeCurrentReward = reward;
+    
+    String balUsd = (balance * priceMee).toStringAsFixed(6);
+    meeBalanceText = "${balance.toStringAsFixed(2)} \$MEE (\$$balUsd)".replaceAll(".", ",");
+    
+    meeRateText = "Скорость: ${meeRatePerSec.toStringAsFixed(10)} MEE/сек".replaceAll(".", ",");
+    _updateRewardLabelsOnly();
+    isRunning = true;
+    countdownVal = updateIntervalSeconds;
+  });
+}
 
   void _updateRewardLabelsOnly() {
     String rewardUsd = (meeCurrentReward * priceMee).toStringAsFixed(6);
     // meeRewardText = "${meeCurrentReward.toStringAsFixed(8)} \$MEE (\$$rewardUsd)".replaceAll(".", ",");
     meeRewardText = "${meeCurrentReward.toStringAsFixed(8)} \$MEE ".replaceAll(".", ",");
+    
   }
 
   Future<void> _checkUpdates({required bool manualCheck}) async {
@@ -678,7 +728,7 @@ void _showMegaEventDialog() {
            if (!manualCheck) _showUpdateModal(cleanLatest, downloadUrl);
         } else {
            setState(() {
-             updateStatusText = manualCheck ? "Версия v$currentVersion (Последняя)" : "v$currentVersion (Обновить?)";
+             updateStatusText = manualCheck ? "Версия v$currentVersion (Последняя)" : "v$currentVersion (Проверить обновление)";
              updateStatusColor = manualCheck ? Colors.greenAccent : Colors.grey;
              updateAction = () => _manualUpdateCheck();
            });
@@ -775,7 +825,7 @@ void _showMegaEventDialog() {
             TextSpan(text: "APT (газ)", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
             TextSpan(text: ".\n\n"),
             TextSpan(text: "📈 О проекте:\n", style: TextStyle(fontWeight: FontWeight.bold)),
-            TextSpan(text: "MEE — утилитарный токен площадки MEEIRO. Майнинг реализован через официальные смарт-контракты проекта."),
+            TextSpan(text: "Майнинг реализован через официальные смарт-контракты проекта."),
           ]
         )),
       ),
@@ -874,7 +924,7 @@ void _showMegaEventDialog() {
           TextSpan(text: "T1", style: highlightStyle),
           TextSpan(text: ".\n"),
           TextSpan(text: "3. Нажмите кнопку "),
-          TextSpan(text: "RUN", style: highlightStyle),
+          TextSpan(text: "EXECUTE", style: highlightStyle),
           TextSpan(text: "."),
         ]))
       },
@@ -891,7 +941,7 @@ void _showMegaEventDialog() {
           TextSpan(text: "arg0", style: highlightStyle),
           TextSpan(text: " - введите сумму (1 MEE = 1000000).\n"),
           TextSpan(text: "4. Нажмите "),
-          TextSpan(text: "RUN", style: highlightStyle),
+          TextSpan(text: "EXECUTE", style: highlightStyle),
           TextSpan(text: "."),
         ]))
       },
@@ -920,7 +970,7 @@ void _showMegaEventDialog() {
               const TextSpan(text: "   • 1 — Мгновенный ", style: stepStyle),
               const TextSpan(text: "(комиссия 15%)\n\n"),
               const TextSpan(text: "5. Нажмите ", style: stepStyle),
-              const TextSpan(text: "RUN", style: highlightStyle),
+              const TextSpan(text: "EXECUTE", style: highlightStyle),
               const TextSpan(text: " и подтвержите транзакцию.\n\n"),
               const TextSpan(text: "──────────────────────\n"),
               const TextSpan(text: "📌 Важно: ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blueAccent)),
@@ -994,11 +1044,48 @@ void _showMegaEventDialog() {
                     children: [
                       Text(walletLabelText, style: TextStyle(fontSize: 14, color: walletLabelColor, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 6),
-                      Text(onChainBalancesText, style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w500)),
-                      
- 
+                      // Text(onChainBalancesText, style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w500)),
+                     
 
-                    
+                      Text.rich(
+                        TextSpan(
+                          style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w500),
+                          children: [
+                            // --- APT ---
+                            const TextSpan(text: "\$APT", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            TextSpan(text: ": ${aptOnChain.toStringAsFixed(8)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            const TextSpan(text: " (", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "\$${priceApt}", style: const TextStyle(color: Colors.greenAccent)),
+                            const TextSpan(text: " / ", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "\$${(aptOnChain * priceApt).toStringAsFixed(4)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                            const TextSpan(text: ") ", style: TextStyle(color: Colors.greenAccent)),
+                            
+                            // Разделитель
+                            const TextSpan(text: "| ", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)),
+                            
+                            // --- MEE ---
+                            const TextSpan(text: "\$MEE", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            TextSpan(text: ": ${meeOnChain.toStringAsFixed(6)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            const TextSpan(text: " (", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "\$${priceMee.toStringAsFixed(6)}", style: const TextStyle(color: Colors.greenAccent)),
+                            const TextSpan(text: " / ", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "\$${(meeOnChain * priceMee).toStringAsFixed(6)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                            const TextSpan(text: ") ", style: TextStyle(color: Colors.greenAccent)),
+
+                            // Разделитель
+                            const TextSpan(text: "| ", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)),
+
+                            // --- MEGA ---
+                            const TextSpan(text: "\$MEGA", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            TextSpan(text: ": ${megaOnChain.toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            const TextSpan(text: " (", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "${_getMegaCurrentPrice().toStringAsFixed(6)}", style: const TextStyle(color: Colors.greenAccent)),
+                            const TextSpan(text: " / ", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "\$${(megaOnChain * _getMegaCurrentPrice() * priceApt).toStringAsFixed(4)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                            const TextSpan(text: ")", style: TextStyle(color: Colors.greenAccent)),
+                          ],
+                        ),
+                      ),
 
 
                       const SizedBox(height: 8),
@@ -1015,12 +1102,40 @@ void _showMegaEventDialog() {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                       const Text("Баланс майнинга:", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13)),
-                       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                           Expanded(child: Text(meeBalanceText, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500))),
-                           ElevatedButton(onPressed: () => _showModalAndOpenUrl("Stake", addMeeUrl),
-                             style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700), child: const Text("Добавить", style: TextStyle(fontSize: 12)))
-                       ])
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text("Баланс майнинга:", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                          // Кнопка вывода (бывшая "Забрать $MEE"), теперь просто "X"
+                          SizedBox(
+                            width: 15,
+                            height: 15,
+                            child: ElevatedButton(
+                              onPressed: () => _showModalAndOpenUrl("Unstake", unstakeBaseUrl),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.grey.shade800,
+                                padding: EdgeInsets.zero, // Убираем отступы, чтобы текст влез в центр
+                                minimumSize: Size.zero,   // Разрешаем кнопке быть очень маленькой
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap, // Убираем невидимую рамку вокруг
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                              ),
+                              child: const Text("X", style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold)), // Шрифт уменьшен до 10
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween, 
+                        children: [
+                          Expanded(child: Text(meeBalanceText, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500))),
+                          ElevatedButton(
+                            onPressed: () => _showModalAndOpenUrl("Stake", addMeeUrl),
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700), 
+                            child: const Text("Добавить", style: TextStyle(fontSize: 12))
+                          )
+                        ]
+                      )
                     ],
                   )
                 ),
@@ -1036,24 +1151,48 @@ void _showMegaEventDialog() {
                         Text(rewardTickerText),
                       ]),
                       const SizedBox(height: 4),
-                      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                         Expanded(child: Text(meeRewardText, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.greenAccent))),
-                         ElevatedButton(onPressed: () => _showModalAndOpenUrl("Harvest", harvestBaseUrl),
-                           style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700), child: const Text("Забрать", style: TextStyle(fontSize: 12)))
-                      ]),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween, 
+                        crossAxisAlignment: CrossAxisAlignment.center, // Выравнивание по центру по вертикали для кнопки
+                        children: [
+                          // Используем Column, чтобы сумма в монетах и в $ были друг под другом
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  meeRewardText, 
+                                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.greenAccent)
+                                ),
+                                const SizedBox(height: 2),
+                                // НОВЫЙ БЛОК: Сумма в долларах
+                                Text(
+                                  "(\$${(meeCurrentReward * priceMee).toStringAsFixed(6)})".replaceAll(".", ","),
+                                  style: TextStyle(fontSize: 13, color: Colors.greenAccent.withOpacity(0.8), fontWeight: FontWeight.w500)
+                                ),
+                              ],
+                            ),
+                          ),
+                          ElevatedButton(
+                            onPressed: () => _showModalAndOpenUrl("Harvest", harvestBaseUrl),
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700), 
+                            child: const Text("Забрать награду", style: TextStyle(fontSize: 12))
+                          )
+                        ]
+                      ),
                       const SizedBox(height: 6),
                       Row(children: [
                         Text(meeRateText, style: const TextStyle(fontSize: 11, color: Colors.white60)),
                         const SizedBox(width: 10),
                         SizedBox(
-                          width: 44, height: 44,
+                          width: 25, height: 25,
                           child: IconButton(
                             padding: EdgeInsets.zero,
                             onPressed: _showMiningInfo, 
                             icon: Container(
-                              width: 38, height: 38,
+                              width: 20, height: 20,
                               decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.blueAccent, width: 2)),
-                              child: const Center(child: Text("?", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 20))),
+                              child: const Center(child: Text("?", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 8))),
                             ),
                           ),
                         ),
@@ -1061,15 +1200,7 @@ void _showMegaEventDialog() {
                     ],
                   )
                 ),
-                _buildSection(
-                  bg: const Color(0xFF331111),
-                  borderColor: Colors.red.shade900,
-                  child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    const Text("Вывод средств:", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                    ElevatedButton(onPressed: () => _showModalAndOpenUrl("Unstake", unstakeBaseUrl),
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade900), child: const Text("Забрать \$MEE"))
-                  ])
-                ),
+        
 
                 // GTA
                 GestureDetector(
@@ -1099,8 +1230,7 @@ void _showMegaEventDialog() {
                 GridView.count(
                   crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), childAspectRatio: 3.5,
                   children: [
-                    _linkBtn("Исходный код", urlSource),
-                    _linkBtn("График \$MEE", urlGraph),
+                    _linkBtn("Исходный код", urlSource), //  _linkBtn("График \$MEE", urlGraph),
                     _actionBtn("О проекте", _showAboutProject),
                     _linkBtn("Обмен \$MEE/APT", urlSwapEarnium),
                     _linkBtn("Чат поддержки", urlSupport),
@@ -1133,4 +1263,233 @@ void _showMegaEventDialog() {
         child: Text(text, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
     ));
   }
+}
+
+
+// ВСТАВЛЯТЬ СТРОГО ОДИН РАЗ В КОНЕЦ ФАЙЛА
+class _AnimatedMegaChart extends StatefulWidget {
+  final double currentPrice;
+  _AnimatedMegaChart({required this.currentPrice});
+  @override
+  _AnimatedMegaChartState createState() => _AnimatedMegaChartState();
+}
+
+class _AnimatedMegaChartState extends State<_AnimatedMegaChart> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 12),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Container(
+          width: 300,
+          height: 240,
+          margin: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: Colors.greenAccent.withOpacity(0.2)),
+            boxShadow: [
+              BoxShadow(color: Colors.greenAccent.withOpacity(0.05), blurRadius: 20)
+            ],
+          ),
+          child: CustomPaint(
+            painter: MegaChartPainter(_controller.value, widget.currentPrice),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class MegaChartPainter extends CustomPainter {
+  final double animationValue;
+  final double currentPrice;
+  MegaChartPainter(this.animationValue, this.currentPrice);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double w = size.width;
+    final double h = size.height - 40;
+    final double paddingX = 35; // Отступ для текста месяцев
+    final double chartW = w - paddingX * 2;
+    final double chartH = h - 60;
+
+    // Функция позиции: 0.0 (Январь) -> 1.0 (Ноябрь)
+    Offset getPos(double t) {
+      double x = paddingX + t * chartW;
+      double y = (h - 20) - (t * chartH); 
+      return Offset(x, y);
+    }
+
+    void drawText(String text, Offset pos, Color color, {double size = 10, bool bold = false}) {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(color: color, fontSize: size, fontWeight: bold ? FontWeight.bold : FontWeight.normal, fontFamily: 'monospace'),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, pos);
+    }
+
+    // 1. СЕТКА (Горизонтальные уровни)
+    // Увеличиваем прозрачность до 0.25 и толщину до 0.8 для четкости
+    final gridPaint = Paint()
+      ..color = Colors.white.withOpacity(0.25) 
+      ..strokeWidth = 0.8;
+      
+    for (int i = 0; i <= 3; i++) {
+      double y = (h - 20) - (i * chartH / 3);
+      // Рисуем линию
+      canvas.drawLine(Offset(paddingX, y), Offset(w - paddingX, y), gridPaint);
+    }
+
+    // 6. ВЕРТИКАЛЬНАЯ СЕТКА (чтобы сетка была полной клеткой)
+    // В блоке с месяцами (внизу метода) убедитесь, что вертикальные линии тоже яркие
+    final verticalGridPaint = Paint()
+      ..color = Colors.white.withOpacity(0.15)
+      ..strokeWidth = 0.5;
+
+    // 2. ЦЕНОВЫЕ ЛИМИТЫ
+    drawText("0.001 APT", const Offset(10, 10), Colors.greenAccent.withOpacity(0.6));
+    drawText("0.1 APT", Offset(w - 55, 10), Colors.greenAccent, bold: true);
+
+    // 3. ОСНОВНАЯ ЛИНИЯ ГРАФИКА
+    canvas.drawLine(getPos(0), getPos(1), Paint()..color = Colors.white.withOpacity(0.15)..strokeWidth = 2);
+
+    // 4. ТЕКУЩАЯ ТОЧКА (СВЕРХЪЯРКАЯ И БЫСТРАЯ ПУЛЬСАЦИЯ)
+    double currentProgress = (currentPrice - 0.001) / (0.1 - 0.001);
+    currentProgress = currentProgress.clamp(0.0, 1.0);
+    Offset currentPos = getPos(currentProgress);
+
+    // Ускоряем пульсацию в 3 раза (добавляем * 3.0)
+    double pulseFactor = math.sin(animationValue * math.pi * 2 * 3.0);
+    
+    // 1. ВНЕШНЕЕ СВЕЧЕНИЕ (Аура)
+    for (int i = 1; i <= 3; i++) {
+      double glowSize = (12 + (pulseFactor * 8)) * i;
+      canvas.drawCircle(
+        currentPos,
+        glowSize,
+        Paint()
+          ..color = Colors.greenAccent.withOpacity((0.3 / i).clamp(0.0, 1.0))
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 10 * i.toDouble()),
+      );
+    }
+
+    // 2. ЯРКИЙ ЦЕНТРАЛЬНЫЙ ОРЕОЛ
+    canvas.drawCircle(
+      currentPos,
+      8 + (pulseFactor * 4),
+      Paint()
+        ..color = Colors.greenAccent
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+    );
+
+    // 3. БЕЛОЕ ЯДРО
+    canvas.drawCircle(
+      currentPos,
+      5,
+      Paint()
+        ..color = Colors.white
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+    );
+
+    // 4. САМА ТОЧКА
+    canvas.drawCircle(currentPos, 4, Paint()..color = Colors.greenAccent);
+    
+    // ОСТАВЛЯЕМ ТОЛЬКО ОДИН ВЫВОД ЦЕНЫ ТУТ:
+    drawText("${currentPrice.toStringAsFixed(6)} APT", 
+      Offset(currentPos.dx - 35, currentPos.dy - 45), // Поднял чуть выше для красоты
+      Colors.greenAccent, size: 11, bold: true);
+
+    // 5. КОМЕТА И СВЕРХ-ЯРКИЙ ХВОСТ
+    double cometT = currentProgress + (animationValue * (1.0 - currentProgress));
+    Offset cometPos = getPos(cometT);
+    
+    // Эффект Bloom (свечение хвоста)
+    canvas.drawLine(currentPos, cometPos, Paint()
+      ..shader = LinearGradient(colors: [Colors.greenAccent.withOpacity(0), Colors.greenAccent.withOpacity(0.5)]).createShader(Rect.fromPoints(currentPos, cometPos))
+      ..strokeWidth = 12.0
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
+
+    // Основная яркая линия
+    canvas.drawLine(currentPos, cometPos, Paint()
+      ..shader = LinearGradient(colors: [Colors.greenAccent.withOpacity(0), Colors.greenAccent, Colors.white], stops: const [0.0, 0.8, 1.0]).createShader(Rect.fromPoints(currentPos, cometPos))
+      ..strokeWidth = 4.5
+      ..strokeCap = StrokeCap.round);
+
+    // --- АГРЕССИВНАЯ ПУЛЬСАЦИЯ ГОЛОВЫ КОМЕТЫ ---
+    // Ускоряем пульсацию (как и у основной точки)
+    double cometPulse = math.sin(animationValue * math.pi * 2 * 3.0);
+    
+    // 1. Внешний пульсирующий ореол (создает эффект "энергетического заряда")
+    canvas.drawCircle(
+      cometPos, 
+      12 + (cometPulse * 8), // Радиус "гуляет" от 4 до 20
+      Paint()
+        ..color = Colors.greenAccent.withOpacity(0.6)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+    );
+
+    // 2. Внутренняя яркая вспышка
+    canvas.drawCircle(
+      cometPos, 
+      6 + (cometPulse * 3), 
+      Paint()
+        ..color = Colors.greenAccent.withOpacity(0.6)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+    );
+
+    // 3. Твердое ядро головы
+    canvas.drawCircle(cometPos, 4, Paint()..color = Colors.white);
+
+    // --- ЦЕНА У ГОЛОВЫ КОМЕТЫ (ПРОГНОЗ) ---
+    double priceAtComet = 0.001 + (0.1 - 0.001) * cometT;
+    
+    drawText(
+      "${priceAtComet.toStringAsFixed(6)} APT", 
+      Offset(cometPos.dx + 15, cometPos.dy - 25), // Чуть отодвинули от пульсации
+      Colors.white.withOpacity(0.9),
+      size: 10, 
+      bold: true // Сделаем чуть жирнее, чтобы лучше читалось на фоне вспышек
+    );
+
+
+
+
+
+    // 6. МЕСЯЦЫ И ВЕРТИКАЛЬНАЯ СЕТКА
+    List<String> months = ['Янв', 'Мар', 'Май', 'Июл', 'Сен', 'Ноя'];
+    for (int i = 0; i < months.length; i++) {
+      double t = i / (months.length - 1);
+      double x = paddingX + t * chartW;
+      
+      // Вертикальная линия сетки
+      canvas.drawLine(Offset(x, h - 20), Offset(x, h - 20 - chartH), gridPaint);
+
+      // Подпись месяца ровно под линией
+      drawText(months[i], Offset(x - 12, h + 8), Colors.white.withOpacity(0.7), size: 10);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant MegaChartPainter oldDelegate) => true;
 }
