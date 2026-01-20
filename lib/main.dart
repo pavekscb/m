@@ -7,9 +7,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:math'; // Добавлено для pow
 import 'dart:math' as math;
+import 'package:flutter/gestures.dart';
 
 // --- КОНСТАНТЫ ПРИЛОЖЕНИЯ И ВЕРСИИ ---
-const String currentVersion = "1.0.7"; 
+const String currentVersion = "1.0.8"; 
 const String urlGithubApi = "https://api.github.com/repos/pavekscb/m/releases/latest";
 
 const String walletKey = "WALLET_ADDRESS"; 
@@ -35,6 +36,7 @@ const String urlSource = "https://github.com/pavekscb/m";
 // const String urlGraph = "https://dexscreener.com/aptos/pcs-167";
 const String urlSwapEarnium = "https://app.panora.exchange/?ref=V94RDWEH#/swap/aptos?pair=MEE-APT";
 const String urlSupport = "https://t.me/cripto_karta";
+const String urlGraph = "https://dexscreener.com/aptos/pcs-167";
 
 void main() {
   runApp(const MeeiroApp());
@@ -74,11 +76,31 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   int countdownVal = updateIntervalSeconds;
   bool isRunning = false;
   
+  double unlockingAmount = 0.0;
+  int? unlockingStartTime; // Время начала разблокировки (timestamp)
+  bool isUnlockComplete = false; // Флаг: прошло ли время ожидания (15 дней)
+
   double aptOnChain = 0.0;
   double meeOnChain = 0.0;
 
   double priceApt = 0.0;
   double priceMee = 0.0;
+  double megaInUsd = 0.0;
+  String megaRewardText = "0,00000000 \$MEGA";
+  String megaRateText = "Доходность: 15% APR (0,00 MEGA/сек)";
+
+  BigInt megaStakedAmountRaw = BigInt.zero; // Raw-значение стейка $MEGA (из блокчейна)
+  BigInt megaLastUpdate = BigInt.zero;      // Время последнего обновления (из блокчейна)
+  BigInt megaUnlockTime = BigInt.zero;      // Время разблокировки (если unstake заказан)
+  BigInt megaCurrentReward = BigInt.zero;   // Текущая награда $MEGA (локальный расчет)
+
+  BigInt megaApy = BigInt.from(15);   // APY 15% (убрал const, так как в коде не const)
+  BigInt secondsInYear = BigInt.from(31536000); // Секунд в году (убрал const)
+  BigInt megaNetworkTimeOffset = BigInt.zero; // Смещение времени сети (для синхронизации)
+
+  bool isMegaUnlockComplete = false; // Переместил внутрь класса
+
+  double megaStakeBalance = 0.0; // Баланс $MEGA именно в стейкинге
 
   final List<String> animationFrames = ['🌱', '🌿', '💰'];
   int currentFrameIndex = 0;
@@ -95,6 +117,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   String updateStatusText = "";
   Color updateStatusColor = const Color(0xFFBBBBBB);
   VoidCallback? updateAction;
+
+  Widget _buildUnlockCountdown() {
+    if (unlockingStartTime == null) return const SizedBox();
+    
+    final int now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final int unlockTime = unlockingStartTime! + (15 * 24 * 60 * 60);
+    final int remaining = unlockTime - now;
+
+    if (remaining <= 0) {
+      return const Text("✅ Можно выводить!", style: TextStyle(color: Colors.greenAccent, fontSize: 11));
+    }
+
+    int days = remaining ~/ 86400;
+    int hours = (remaining % 86400) ~/ 3600;
+    int minutes = (remaining % 3600) ~/ 60;
+
+    return Text(
+      "До завершения: $days д. $hours ч. $minutes мин.",
+      style: const TextStyle(color: Colors.white54, fontSize: 11),
+    );
+  }
 
   @override
   void initState() {
@@ -124,12 +167,297 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         _updateRewardLabelsOnly();
         countdownVal -= 1;
         rewardTickerText = animationFrames[currentFrameIndex];
+        _startMegaSimulation();
       });
       if (countdownVal <= 0) {
         _runUpdateThread();
         countdownVal = updateIntervalSeconds;
       }
     });
+  }
+
+  // Функция для расчета цены $MEGA в APT (уже есть _getMegaCurrentPrice, но возвращаем в double)
+  double _getMegaPriceInApt() {
+    return _getMegaCurrentPrice(); // Возвращает цену в APT (0.001 -> 0.1)
+  }
+
+  // Функция для расчета текущей награды $MEGA локально (аналогично popup.js)
+  void _calculateMegaRewardLocally() {
+    if (megaStakedAmountRaw == BigInt.zero || megaLastUpdate == BigInt.zero) {
+      megaCurrentReward = BigInt.zero;
+      return;
+    }
+
+    final int now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final BigInt nowSynced = BigInt.from(now) + megaNetworkTimeOffset;
+
+    // Если unstake заказан или время не прошло — награда 0 (как в контракте)
+    if (megaUnlockTime > BigInt.zero || nowSynced <= megaLastUpdate) {
+      megaCurrentReward = BigInt.zero;
+      return;
+    }
+
+    final BigInt duration = nowSynced - megaLastUpdate;
+    megaCurrentReward = (megaStakedAmountRaw * megaApy * duration) ~/ (secondsInYear * BigInt.from(100));
+  }
+
+  // Функция для расчета скорости (rate) $MEGA/сек
+  double _getMegaRatePerSec() {
+    if (megaStakedAmountRaw == BigInt.zero) return 0.0;
+    final double rate = (megaStakedAmountRaw.toDouble() * 15) / (31536000 * 100 * pow(10, decimals));
+    return rate;
+  }
+
+  // Функция для обновления меток $MEGA (награда, USD, rate)
+  void _updateMegaLabels() {
+    setState(() {
+      // Награда в $MEGA
+      final double megaRewardFloat = megaCurrentReward.toDouble() / pow(10, decimals);
+      final double megaPriceInApt = _getMegaPriceInApt();
+      final double megaRewardUsd = megaRewardFloat * megaPriceInApt * priceApt;
+
+      // Обновляем текст награды с USD в скобках (зелёным цветом)
+      megaRewardText = "${megaRewardFloat.toStringAsFixed(8).replaceAll(".", ",")} \$MEGA";
+      if (priceApt > 0) {
+        //megaRewardText += " (\$${megaRewardUsd.toStringAsFixed(8).replaceAll(".", ",")})"; 
+        megaRewardText += "\n(\$${megaRewardUsd.toStringAsFixed(8).replaceAll(".", ",")})";
+      }
+
+      // Доходность: 15% APR (rate $MEGA/сек)
+      final double megaRate = _getMegaRatePerSec();
+      megaRateText = "Доходность: 15% APR (${megaRate.toStringAsFixed(10).replaceAll(".", ",")} \$MEGA / сек)";
+    });
+  }
+
+  // Функция для таймера unstake $MEGA (аналогично _buildUnlockCountdown для MEE, добавил секунды)
+  Widget _buildMegaUnlockCountdown() {
+    if (megaUnlockTime == BigInt.zero) return const SizedBox();
+
+    final int now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final BigInt nowSynced = BigInt.from(now) + megaNetworkTimeOffset;
+    final BigInt remaining = megaUnlockTime - nowSynced;
+
+    if (remaining <= BigInt.zero) {
+      isMegaUnlockComplete = true;
+      return const Text("✅ Можно выводить!", style: TextStyle(color: Colors.greenAccent, fontSize: 11));
+    } else {
+      isMegaUnlockComplete = false;
+    }
+
+    final BigInt days = remaining ~/ BigInt.from(86400);
+    final BigInt hours = (remaining % BigInt.from(86400)) ~/ BigInt.from(3600);
+    final BigInt minutes = (remaining % BigInt.from(3600)) ~/ BigInt.from(60);
+    final BigInt seconds = remaining % BigInt.from(60);
+
+    return Text(
+      "До завершения: $days д. $hours ч. $minutes мин. $seconds сек.",
+      style: const TextStyle(color: Colors.white54, fontSize: 11),
+    );
+  }
+
+  // Функция для синхронизации данных $MEGA с блокчейном (вызывается в _runUpdateThread)
+  Future<void> _fetchMegaStakeData() async {
+    try {
+      final url = Uri.parse("$aptLedgerUrl/accounts/$currentWalletAddress/resource/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3::mega_coin::StakePosition");
+      final headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+      };
+      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body)['data'];
+        if (data != null) { // Добавил проверку
+          megaStakedAmountRaw = BigInt.parse(data['amount'] ?? '0');
+          megaLastUpdate = BigInt.parse(data['last_update'] ?? '0');
+          megaUnlockTime = BigInt.parse(data['unlock_time'] ?? '0');
+          megaStakeBalance = megaStakedAmountRaw.toDouble() / pow(10, decimals);
+
+          // Расчет megaInUsd
+          final double megaPriceInApt = _getMegaPriceInApt();
+          megaInUsd = megaStakeBalance * megaPriceInApt * priceApt;
+
+          // Смещение времени сети
+          final ledgerResponse = await http.get(Uri.parse(aptLedgerUrl));
+          if (ledgerResponse.statusCode == 200) {
+            final ledgerData = json.decode(ledgerResponse.body);
+            final BigInt ledgerTimeSec = BigInt.from(int.parse(ledgerData['ledger_timestamp']) ~/ 1000000);
+            final BigInt localTimeSec = BigInt.from(DateTime.now().millisecondsSinceEpoch ~/ 1000);
+            megaNetworkTimeOffset = ledgerTimeSec - localTimeSec;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint("Mega stake fetch error: $e");
+    }
+  }
+
+  // Функция для запуска симуляции $MEGA
+  void _startMegaSimulation() {
+    _calculateMegaRewardLocally();
+    _updateMegaLabels();
+  }
+
+  void _showContractsDialog() {
+  showDialog(
+    context: context,
+    builder: (BuildContext context) {
+      return AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(15),
+          side: const BorderSide(color: Colors.blueAccent, width: 1.5),
+        ),
+        title: const Center(
+          child: Text(
+            "📜 Контракты монет",
+            style: TextStyle(
+              color: Colors.blueAccent,
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
+            ),
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: RichText(
+            textAlign: TextAlign.center,
+            text: TextSpan(
+              style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
+              children: [
+                const TextSpan(
+                  text: "Контракт монеты ",
+                  style: TextStyle(color: Colors.white70),
+                ),
+                const TextSpan(
+                  text: "\$MEE",
+                  style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold),
+                ),
+                const TextSpan(text: ":\n"),
+                WidgetSpan(
+                  child: GestureDetector(
+                    onTap: () async {
+                      await Clipboard.setData(const ClipboardData(
+                        text: "0xe9c192ff55cffab3963c695cff6dbf9dad6aff2bb5ac19a6415cad26a81860d9::mee_coin::MeeCoin",
+                      ));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Контракт \$MEE скопирован в буфер"),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 6),
+                      child: Text(
+                        "0xe9c192ff55cffab3963c695cff6dbf9dad6aff2bb5ac19a6415cad26a81860d9::mee_coin::MeeCoin",
+                        style: TextStyle(
+                          color: Colors.cyanAccent,
+                          fontSize: 13,
+                          decoration: TextDecoration.underline,
+                          decorationColor: Colors.cyanAccent,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+                const TextSpan(text: "\n\n"),
+                const TextSpan(
+                  text: "Контракт монеты ",
+                  style: TextStyle(color: Colors.white70),
+                ),
+                const TextSpan(
+                  text: "\$MEGA",
+                  style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                ),
+                const TextSpan(text: ":\n"),
+                WidgetSpan(
+                  child: GestureDetector(
+                    onTap: () async {
+                      await Clipboard.setData(const ClipboardData(
+                        text: "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3::mega_coin::MEGA",
+                      ));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Контракт \$MEGA скопирован в буфер"),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 6),
+                      child: Text(
+                        "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3::mega_coin::MEGA",
+                        style: TextStyle(
+                          color: Colors.greenAccent,
+                          fontSize: 13,
+                          decoration: TextDecoration.underline,
+                          decorationColor: Colors.greenAccent,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+                const TextSpan(text: "\n\n"),
+                const TextSpan(
+                  text: "Купить/продать (Swap tokens)",
+                  style: TextStyle(color: Colors.white70),
+                ),
+                const TextSpan(
+                  text: "\$MEE ",
+                  style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold),
+                ),
+                const TextSpan(text: "можно в кошельке Petra.\n"),
+                const TextSpan(
+                  text: "\$MEGA - идет MINT до 19.11.2026",
+                  style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                ),
+                const TextSpan(text: "— кликните на баннер GTA 6."),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            style: TextButton.styleFrom(foregroundColor: Colors.blueAccent),
+            child: const Text("Закрыть", style: TextStyle(fontSize: 16)),
+          ),
+        ],
+        actionsPadding: const EdgeInsets.only(bottom: 12, right: 12, left: 12),
+      );
+    },
+  );
+}
+
+
+
+  Widget _buildFooterLink(BuildContext context, String text, String urlPath) {
+    return GestureDetector(
+      onTap: () => _launchMegaUrl(context, urlPath),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Colors.cyanAccent,
+          fontSize: 12,
+          decoration: TextDecoration.underline, // Подчеркивание, чтобы было понятно, что это ссылка
+        ),
+      ),
+    );
+  }
+
+  Future<void> _launchMegaUrl(BuildContext context, String urlPath) async {
+    final Uri url = Uri.parse(urlPath);
+    Navigator.pop(context); // Закрываем диалог
+    try {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      if (await canLaunchUrl(url)) {
+        await launchUrl(url, mode: LaunchMode.platformDefault);
+      }
+    }
   }
 
   Future<void> _loadWalletAddress() async {
@@ -242,16 +570,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-double _getMegaCurrentPrice() {
-  const int startTimeSeconds = 1767623400; // 5 Jan 2026
-  const int endTimeSeconds = 1795075200;   // 19 Nov 2026
-  const double startPrice = 0.001;
-  const double endPrice = 0.1;
-  final int nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-  if (nowSeconds >= endTimeSeconds) return endPrice;
-  if (nowSeconds <= startTimeSeconds) return startPrice;
-  return startPrice + (endPrice - startPrice) * (nowSeconds - startTimeSeconds) / (endTimeSeconds - startTimeSeconds);
-}
+  double _getMegaCurrentPrice() {
+    const int startTimeSeconds = 1767623400; // 5 Jan 2026
+    const int endTimeSeconds = 1795075200;   // 19 Nov 2026
+    const double startPrice = 0.001;
+    const double endPrice = 0.1;
+    final int nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    if (nowSeconds >= endTimeSeconds) return endPrice;
+    if (nowSeconds <= startTimeSeconds) return startPrice;
+    return startPrice + (endPrice - startPrice) * (nowSeconds - startTimeSeconds) / (endTimeSeconds - startTimeSeconds);
+  }
 
 
 
@@ -332,7 +660,7 @@ void _showMegaEventDialog() {
             insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: Colors.purpleAccent, width: 1.5),
+              side: const BorderSide(color: Colors.greenAccent, width: 1.5),
             ),
             title: Column(
               children: [
@@ -397,7 +725,7 @@ void _showMegaEventDialog() {
                         style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.5),
                         children: [
                           const TextSpan(text: "Цена растет каждую секунду! Успей забрать "),
-                          const TextSpan(text: "\$MEGA", style: TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold)),
+                          const TextSpan(text: "\$MEGA", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
                           const TextSpan(text: " до 19 ноября 2026 года.\n\n"),
                           const TextSpan(text: "🔥 Нажмите ", style: TextStyle(color: Colors.orangeAccent)),
                           const TextSpan(text: "ЗАБРАТЬ \$MEGA", style: TextStyle(fontWeight: FontWeight.bold)),
@@ -410,7 +738,7 @@ void _showMegaEventDialog() {
                           const TextSpan(text: "Теперь вы — "),
                           const TextSpan(text: "ранний холдер ", style: TextStyle(fontStyle: FontStyle.italic)),
                           const TextSpan(text: "эксклюзивной монеты "),
-                          const TextSpan(text: "\$MEGA! 💎\n\n", style: TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold)),
+                          const TextSpan(text: "\$MEGA! 💎\n\n", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
                           const TextSpan(
                             text: "⚠️ Важно: убедитесь, что на балансе есть немного APT для оплаты газа.",
                             style: TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold),
@@ -428,50 +756,101 @@ void _showMegaEventDialog() {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text("Отмена", style: TextStyle(color: Colors.white70, fontSize: 16)),
+                  SizedBox(
+                    width: 100, // Ширина в 2 раза меньше (под текст + отступы; можно изменить на 80–120 по вкусу)
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: TextButton.styleFrom(
+                        minimumSize: Size.zero, // Убираем минимальную ширину по умолчанию, чтобы под текст
+                        padding: const EdgeInsets.symmetric(horizontal: 8), // Минимальные отступы для подгонки под текст
+                      ),
+                      child: const Text("Отмена", style: TextStyle(color: Colors.white70, fontSize: 14)),
+                    ),
                   ),
                   const SizedBox(height: 8),
-                  ElevatedButton(
-                    onPressed: () async {
-                      const String urlPath = "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest?network=mainnet";
-                      final Uri url = Uri.parse(urlPath);
-                      Navigator.pop(context);
-                      try {
-                        await launchUrl(url, mode: LaunchMode.externalApplication);
-                      } catch (e) {
-                        if (await canLaunchUrl(url)) {
-                          await launchUrl(url, mode: LaunchMode.platformDefault);
-                        }
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.greenAccent.shade700,
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: const Text("ЗАБРАТЬ \$MEGA", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  ),
-                  const SizedBox(height: 16),
-                  GestureDetector(
-                    onTap: () async {
-                      const String urlPath = "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest?network=mainnet";
-                      final Uri url = Uri.parse(urlPath);
-                      if (!await launchUrl(url, mode: LaunchMode.platformDefault)) {
-                        await launchUrl(url, mode: LaunchMode.externalApplication);
-                      }
-                    },
-                    child: const Text(
-                      "Проблема с кнопкой? Нажми здесь",
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.cyanAccent,
-                        fontSize: 13,
-                        decoration: TextDecoration.underline,
+                  
+                  // Ряд с кнопками
+                  Row(
+                    children: [
+                      // КНОПКА ЗАБРАТЬ 1 $MEGA (Основная, слева)
+                      Expanded(
+                        flex: 2, // Делаем её чуть шире
+                        child: ElevatedButton(
+                          onPressed: () => _launchMegaUrl(context, "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest?network=mainnet"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.greenAccent.shade700,
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(vertical: 20), // Высокая кнопка
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: const Text("ЗАБРАТЬ\n1 \$MEGA", textAlign: TextAlign.center, style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                        ),
                       ),
-                    ),
+                      const SizedBox(width: 8),
+                      
+                      // Столбец с кнопками 10 и 100 (Справа)
+                      Expanded(
+                        flex: 2,
+                        child: Column(
+                          children: [
+                            // Кнопка 10 $MEGA
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: () => _launchMegaUrl(context, "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest10?network=mainnet"),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.blueAccent.shade700,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                child: const Text("ЗАБРАТЬ 10 \$MEGA", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            // Кнопка 100 $MEGA
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: () => _launchMegaUrl(context, "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest100?network=mainnet"),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.purpleAccent.shade700,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                child: const Text("ЗАБРАТЬ 100 \$MEGA", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  // Заменяем старый GestureDetector на этот Wrap
+                  Wrap(
+                    alignment: WrapAlignment.center, // Центрируем ссылки
+                    spacing: 12, // Расстояние между ссылками по горизонтали
+                    runSpacing: 8, // Расстояние между строками, если будет перенос
+                    children: [
+                      _buildFooterLink(
+                        context,
+                        "Проблема с кнопкой? 1 \$MEGA",
+                        "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest?network=mainnet",
+                      ),
+                      _buildFooterLink(
+                        context,
+                        "10 \$MEGA",
+                        "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest10?network=mainnet",
+                      ),
+                      _buildFooterLink(
+                        context,
+                        "100 \$MEGA",
+                        "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/harvest100?network=mainnet",
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -552,6 +931,9 @@ void _showMegaEventDialog() {
 
   Future<void> _runUpdateThread() async {
     await _updatePrices();
+    await _fetchMegaStakeData(); // Получаем данные $MEGA
+    _calculateMegaRewardLocally(); // Первичный расчет награды
+    _updateMegaLabels(); // Обновляем метки
     double aptVal = 0; double meeVal = 0;
     try {
       int aptRaw = await _getRawBalance(aptCoinType);
@@ -565,7 +947,7 @@ void _showMegaEventDialog() {
       int megaRaw = await _getRawBalance(megaCoinType);
       double megaVal = megaRaw / pow(10, megaDec);
       megaOnChain = megaVal;
-
+      megaInUsd = megaStakeBalance * _getMegaCurrentPrice() * priceApt;
       // debugPrint("Mega raw balance: $megaRaw");
 
 
@@ -575,6 +957,7 @@ void _showMegaEventDialog() {
        _updateUI(null, null, 0.0, aptVal, meeVal);
        return;
     }
+
 
     String stakeResType = "0x514cfb77665f99a2e4c65a5614039c66d13e00e98daf4c86305651d29fd953e5::Staking::StakeInfo<$meeCoinT0T1,$meeCoinT0T1>";
     String stakeApiUrl = "$aptLedgerUrl/accounts/$currentWalletAddress/resource/${Uri.encodeComponent(stakeResType)}";
@@ -596,6 +979,46 @@ void _showMegaEventDialog() {
       BigInt amount = BigInt.parse(meeStakeData["amount"]) * BigInt.from(rawDataCorrectionFactor);
       BigInt rewardAmount = BigInt.parse(meeStakeData["reward_amount"]) * BigInt.from(rawDataCorrectionFactor);
       BigInt rewardDebt = BigInt.parse(meeStakeData["reward_debt"]) * BigInt.from(rawDataCorrectionFactor);
+
+      
+       
+      // Читаем данные о разблокировке
+      // BigInt unlockingAmountRaw = BigInt.parse(meeStakeData["unlocking_amount"] ?? "0");
+      BigInt unlockingAmountRaw = BigInt.parse(meeStakeData["unlocking_amount"] ?? "0") * BigInt.from(rawDataCorrectionFactor);
+      unlockingAmount = unlockingAmountRaw.toDouble() / pow(10, decimals);
+      
+      String? startTimeStr = meeStakeData["unlocking_start_time"];
+      unlockingStartTime = (startTimeStr != null && startTimeStr != "0") ? int.parse(startTimeStr) : null;
+
+      // Проверка: завершена ли разблокировка (обычно 15 дней = 1296000 секунд)
+      if (unlockingStartTime != null && currentTime != null) {
+        const int fifteenDaysInSec = 15 * 24 * 60 * 60;
+        isUnlockComplete = (currentTime >= (unlockingStartTime! + fifteenDaysInSec));
+      } else {
+        isUnlockComplete = false;
+      }  
+
+            // --- ЛОГИКА ДЛЯ $MEGA STAKE ---
+      String megaStakeResType = "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3::mega_coin::StakePosition";
+      String megaStakeApiUrl = "$aptLedgerUrl/accounts/$currentWalletAddress/resource/${Uri.encodeComponent(megaStakeResType)}";
+
+      var megaStakeData = await _fetchData(megaStakeApiUrl);
+
+      if (megaStakeData != null) {
+        try {
+          // Получаем значение amount из JSON
+          String rawAmount = megaStakeData["amount"] ?? "0";
+          // Делим на 10^8 (так как в вашем примере 3405127654 -> 34.05)
+          megaStakeBalance = double.parse(rawAmount) / pow(10, 8);
+        } catch (e) {
+          megaStakeBalance = 0.0;
+          debugPrint("Error parsing MEGA stake: $e");
+        }
+      } else {
+        megaStakeBalance = 0.0; // Если ресурса нет (кошелек не стейкал)
+      }
+
+
       if (amount == BigInt.zero) {
         stakeBalance = 0.0; totalRewardFloat = 0.0;
       } else {
@@ -736,7 +1159,7 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
       }
     } catch (e) {
       setState(() {
-         updateStatusText = "Ошибка обновления";
+         updateStatusText = "Идет проверка...";
          updateStatusColor = Colors.redAccent;
          updateAction = () => _manualUpdateCheck();
       });
@@ -809,14 +1232,14 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
     showDialog(context: context, builder: (ctx) => AlertDialog(
       backgroundColor: const Color(0xFF1A1A1A),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: Colors.blue)),
-      title: const Center(child: Text("🚀 MEE Miner", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold))),
+      title: const Center(child: Text("🚀 MEE - MEGA Miner", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold))),
       content: SingleChildScrollView(
         child: RichText(text: const TextSpan(
           style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
           children: [
-            TextSpan(text: "Майнер MEE ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+            TextSpan(text: "Майнер MEE - MEGA ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blueAccent)),
             TextSpan(text: "позволяет накапливать доход даже при минимальном стейкинге в "),
-            TextSpan(text: "1 MEE", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+            TextSpan(text: "1 MEE, 1 MEGA", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
             TextSpan(text: ".\n\n"),
             TextSpan(text: "💡 Бесплатные монеты:\n", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
             TextSpan(text: "Напишите в чат поддержки — сообщество часто помогает новичкам монетами для старта!\n\n"),
@@ -906,6 +1329,50 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
     ));
   }
 
+
+
+
+
+void _showMegaHelp() {
+  showDialog(
+    context: context,
+    builder: (context) => AlertDialog(
+      backgroundColor: const Color(0xFF0D2335), // Темно-синий фон в стиле приложения
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      title: const Text("❓ Как работает майнинг?", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      content: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Text("1. Добавить \$MEGA", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+            Text("Нажимай \"Добавить \$MEGA\" — твои монеты уходят в майнинг-пул. С этого момента они начинают приносить тебе доход 15% в год.\n", style: TextStyle(color: Colors.white70, fontSize: 13)),
+            
+            Text("2. Доход капает автоматически", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+            Text("Ты видишь, сколько уже намайнил — это растёт каждую секунду. Чем дольше монеты в пуле — тем больше доход.\n", style: TextStyle(color: Colors.white70, fontSize: 13)),
+            
+            Text("3. Забрать награду", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+            Text("Нажимай \"Забрать награду\" → сначала забираешь только начисленный доход. Основные монеты остаются в майнинге.\n", style: TextStyle(color: Colors.white70, fontSize: 13)),
+            
+            Text("4. Вывести всё - Забрать \$MEGA", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+            Text("Вывод занимает 15 дней. Награда не начисляется.", style: TextStyle(color: Colors.white70, fontSize: 13)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text("ПОНЯТНО!", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+        ),
+      ],
+    ),
+  );
+}
+
+
+
+
+
   Future<void> _showModalAndOpenUrl(String action, String url) async {
     // Подготовка стилей
     const stepStyle = TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 14);
@@ -971,14 +1438,31 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
               const TextSpan(text: "(комиссия 15%)\n\n"),
               const TextSpan(text: "5. Нажмите ", style: stepStyle),
               const TextSpan(text: "EXECUTE", style: highlightStyle),
-              const TextSpan(text: " и подтвержите транзакцию.\n\n"),
+              const TextSpan(text: " и подтвердите транзакцию.\n\n"),
               const TextSpan(text: "──────────────────────\n"),
               const TextSpan(text: "📌 Важно: ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blueAccent)),
               const TextSpan(text: "Если вы выбрали режим «0», то через "),
               const TextSpan(text: "15 дней ", style: highlightStyle),
               const TextSpan(text: "вам необходимо будет использовать функцию "),
-              const TextSpan(text: "withdraw", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent, decoration: TextDecoration.underline)),
-              const TextSpan(text: ", чтобы монеты вернулись на кошелек.", style: italicStyle),
+              // Ссылка на withdraw
+              TextSpan(
+                text: "withdraw",
+                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent, decoration: TextDecoration.underline),
+                recognizer: TapGestureRecognizer()..onTap = () {
+                  launchUrl(Uri.parse("https://explorer.aptoslabs.com/account/0x514cfb77665f99a2e4c65a5614039c66d13e00e98daf4c86305651d29fd953e5/modules/run/Staking/withdraw?network=mainnet"), mode: LaunchMode.externalApplication);
+                },
+              ),
+              const TextSpan(text: ", чтобы монеты вернулись на кошелек.\n\n", style: italicStyle),
+              
+              // НОВЫЙ ТЕКСТ: Ссылка на cancel_unstake
+              const TextSpan(text: "* Если передумали Unstake, хотите снова майнить, жмите ", style: TextStyle(fontSize: 12, color: Colors.white70)),
+              TextSpan(
+                text: "cancel_unstake",
+                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orangeAccent, decoration: TextDecoration.underline, fontSize: 12),
+                recognizer: TapGestureRecognizer()..onTap = () {
+                  launchUrl(Uri.parse("https://explorer.aptoslabs.com/account/0x514cfb77665f99a2e4c65a5614039c66d13e00e98daf4c86305651d29fd953e5/modules/run/Staking/cancel_unstake?network=mainnet"), mode: LaunchMode.externalApplication);
+                },
+              ),
             ],
           ),
         )
@@ -1012,9 +1496,20 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
     return Container(width: double.infinity, margin: const EdgeInsets.symmetric(vertical: 6), padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8), border: Border.all(color: borderColor, width: 1.5)), child: child);
   }
+  
+
+  
+
+
 
   @override
   Widget build(BuildContext context) {
+    double megaPriceInApt_ui = _getMegaCurrentPrice();
+    double megaPriceInUsd_ui = megaPriceInApt_ui * priceApt;
+    double megaTotalUsd_ui = megaOnChain * megaPriceInUsd_ui;
+    String megaBalanceDisplay = "${megaOnChain.toStringAsFixed(2)} \$MEGA (\$${megaTotalUsd_ui.toStringAsFixed(4)})".replaceAll(".", ",");
+    
+
     return Scaffold(
       body: SafeArea(
         child: RefreshIndicator(
@@ -1032,7 +1527,7 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
               children: [
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 10),
-                  child: Text("МАЙНИНГ \$MEE (APTOS)", 
+                  child: Text("МАЙНИНГ \$MEE-\$MEGA (APTOS)", 
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.blueAccent, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
                 ),
@@ -1105,39 +1600,85 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text("Баланс майнинга:", style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13)),
-                          // Кнопка вывода (бывшая "Забрать $MEE"), теперь просто "X"
-                          SizedBox(
-                            width: 15,
-                            height: 15,
-                            child: ElevatedButton(
-                              onPressed: () => _showModalAndOpenUrl("Unstake", unstakeBaseUrl),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.grey.shade800,
-                                padding: EdgeInsets.zero, // Убираем отступы, чтобы текст влез в центр
-                                minimumSize: Size.zero,   // Разрешаем кнопке быть очень маленькой
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap, // Убираем невидимую рамку вокруг
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                              ),
-                              child: const Text("X", style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold)), // Шрифт уменьшен до 10
+                          const Text("Баланс майнинга \$MEE:",
+                              style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                          ElevatedButton(
+                            onPressed: () => _showModalAndOpenUrl("Unstake", unstakeBaseUrl),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFDC143C),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                              minimumSize: const Size(80, 25),
                             ),
+                            child: const Text("Забрать \$MEE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
                           ),
                         ],
                       ),
                       const SizedBox(height: 4),
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween, 
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Expanded(child: Text(meeBalanceText, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500))),
                           ElevatedButton(
                             onPressed: () => _showModalAndOpenUrl("Stake", addMeeUrl),
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700), 
-                            child: const Text("Добавить", style: TextStyle(fontSize: 12))
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700, foregroundColor: Colors.white),
+                            child: const Text("Добавить \$MEE", style: TextStyle(fontSize: 12)),
                           )
-                        ]
-                      )
+                        ],
+                      ),
+                      
+                      // НОВЫЙ БЛОК: ПРОВЕРКА UNSTAKE
+                      if (unlockingAmount > 0) ...[
+                        const Divider(color: Colors.white10, height: 20),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              "🔓 Разблокировка: ${unlockingAmount.toStringAsFixed(2)} \$MEE",
+                              style: const TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                            ),
+                            _buildUnlockCountdown(), // Вызов таймера (код ниже)
+                            const SizedBox(height: 10),
+                            
+                            // Кнопка ЗАВЕРШИТЬ ВЫВОД
+                            ElevatedButton(
+                              onPressed: isUnlockComplete 
+                                ? () => launchUrl(Uri.parse("https://explorer.aptoslabs.com/account/0x514cfb77665f99a2e4c65a5614039c66d13e00e98daf4c86305651d29fd953e5/modules/run/Staking/withdraw?network=mainnet")) 
+                                : null, // Кнопка неактивна, пока время не выйдет
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isUnlockComplete ? Colors.green : Colors.grey.shade800,
+                                disabledBackgroundColor: Colors.white10,
+                              ),
+                              child: Text(isUnlockComplete ? "ЗАВЕРШИТЬ ВЫВОД \$MEE" : "ОЖИДАНИЕ ВЫВОДА...", 
+                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                            ),
+                            
+                            // Кнопка ОТМЕНИТЬ
+                            TextButton(
+                              onPressed: () async {
+                                // Копируем адрес контракта в буфер обмена
+                                await Clipboard.setData(const ClipboardData(
+                                    text: "0xe9c192ff55cffab3963c695cff6dbf9dad6aff2bb5ac19a6415cad26a81860d9::mee_coin::MeeCoin"));
+                                
+                                // Показываем маленькое уведомление (SnackBar), чтобы пользователь знал, что адрес скопирован
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text("Адрес контракта скопирован в буфер"),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+
+                                // Открываем ссылку в браузере
+                                launchUrl(Uri.parse("https://explorer.aptoslabs.com/account/0x514cfb77665f99a2e4c65a5614039c66d13e00e98daf4c86305651d29fd953e5/modules/run/Staking/cancel_unstake?network=mainnet"));
+                              },
+                              child: const Text("Отменить вывод", 
+                                style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
-                  )
+                  ),
                 ),
                 _buildSection(
                   bg: const Color(0xFF0D2B1A),
@@ -1146,7 +1687,7 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(children: [
-                        const Text("Доступно к сбору:", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                        const Text("Награда майнинга \$MEE:", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 13)),
                         const SizedBox(width: 8),
                         Text(rewardTickerText),
                       ]),
@@ -1175,8 +1716,8 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
                           ),
                           ElevatedButton(
                             onPressed: () => _showModalAndOpenUrl("Harvest", harvestBaseUrl),
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700), 
-                            child: const Text("Забрать награду", style: TextStyle(fontSize: 12))
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white), 
+                            child: const Text("Забрать награду", style: TextStyle(fontSize: 10))
                           )
                         ]
                       ),
@@ -1214,11 +1755,185 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
                     ),
                   ),
                 ),
-                  
+                               // РАЗДЕЛ $MEGA (Ниже баннера GTA)
+                // --- СЕКЦИЯ $MEGA: БАЛАНС (СИНИЙ) ---
+                _buildSection(
+                  bg: const Color(0xFF0D2335),
+                  borderColor: Colors.blue.shade900,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text("Баланс майнинга \$MEGA:", 
+                            style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                          Row(
+                            children: [
+                              // КРУГЛАЯ КНОПКА СПРАВКИ
+                              GestureDetector(
+                                onTap: _showMegaHelp,
+                                child: Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFFDC143C),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.help_outline, color: Colors.white, size: 16),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              
+                              // КНОПКА ЗАБРАТЬ
+                              ElevatedButton(
+                                onPressed: () async {
+                                  const url = "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/unstake_request?network=mainnet";
+                                  if (await canLaunchUrl(Uri.parse(url))) {
+                                    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                                  }
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFDC143C),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                                  minimumSize: const Size(80, 25),
+                                  //shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                child: const Text("ЗАБРАТЬ \$MEGA", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween, 
+                        children: [
+                          // Отображаем баланс из StakePosition (megaStakeBalance)
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text.rich(
+                                  TextSpan(
+                                    style: const TextStyle(fontSize: 14, color: Colors.white70),
+                                    children: [
+                                      TextSpan(
+                                        text: "${megaStakeBalance.toStringAsFixed(4)} ",
+                                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                                      ),
+                                      const TextSpan(
+                                        text: "\$MEGA",
+                                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Text(
+                                  "(\$${megaInUsd.toStringAsFixed(2)})",
+                                  style: const TextStyle(fontSize: 12, color: Colors.greenAccent), 
+                                ),
+                              ],
+                            ),
+                          ),
+                          ElevatedButton(
+                            onPressed: () async {
+                              const url = "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/stake_all?network=mainnet";
+                              final uri = Uri.parse(url);
+                              if (await canLaunchUrl(uri)) {
+                                await launchUrl(uri, mode: LaunchMode.externalApplication);
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue.shade700, 
+                              foregroundColor: Colors.white,
+                              //shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                            child: const Text("Добавить \$MEGA", style: TextStyle(fontSize: 12)),
+                          )
+                        ]
+                      ),
+                    ],
+                  ),
+                ),
+                // --- СЕКЦИЯ $MEGA: НАГРАДА (ЗЕЛЁНЫЙ) --- (удалил дубликат, оставил только обновлённый)
+                _buildSection(
+                  bg: const Color(0xFF0D3523), 
+                  borderColor: Colors.green.shade900,
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text("Награда майнинга \$MEGA:", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                              Text(megaRewardText, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                            ],
+                          ),
+                          ElevatedButton(
+                            onPressed: () async {
+                              const url = "https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/claim_staking_rewards?network=mainnet";
+                              final uri = Uri.parse(url);
+                              if (await canLaunchUrl(uri)) {
+                                await launchUrl(uri, mode: LaunchMode.externalApplication);
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green.shade700, 
+                              foregroundColor: Colors.white,
+                              //shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ), 
+                            child: const Text("Забрать награду", style: TextStyle(fontSize: 9)),
+                          )
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween, 
+                        children: [
+                          Text(megaRateText, style: const TextStyle(fontSize: 10, color: Colors.blueAccent)),
+                        ]
+                      ),
+                      // НОВЫЙ БЛОК: UNSTAKE ДЛЯ $MEGA (если unlocking)
+                      if (megaUnlockTime > BigInt.zero) ...[
+                        const Divider(color: Colors.white10, height: 20),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              "🔓 Разблокировка: ${megaStakeBalance.toStringAsFixed(2)} \$MEGA",
+                              style: const TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                            ),
+                            _buildMegaUnlockCountdown(),
+                            const SizedBox(height: 10),
+                            // Кнопка ЗАВЕРШИТЬ ВЫВОД
+                            ElevatedButton(
+                              onPressed: isMegaUnlockComplete 
+                                ? () async { await launchUrl(Uri.parse("https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/unstake_confirm?network=mainnet")); } 
+                                : null,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isMegaUnlockComplete ? Colors.green : Colors.grey.shade800,
+                                disabledBackgroundColor: Colors.white10,
+                              ),
+                              child: Text(isMegaUnlockComplete ? "ЗАВЕРШИТЬ ВЫВОД \$MEGA" : "ОЖИДАНИЕ ВЫВОДА...", 
+                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                            ),
+                            // Кнопка ОТМЕНИТЬ
+                            TextButton(
+                              onPressed: () async { await launchUrl(Uri.parse("https://explorer.aptoslabs.com/account/0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3/modules/run/mega_coin/cancel_unstake?network=mainnet")); },
+                              child: const Text("Отменить вывод", 
+                                style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  )
+                ),
 
-
-
-
+                const SizedBox(height: 4), 
 
 
 
@@ -1230,10 +1945,12 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
                 GridView.count(
                   crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), childAspectRatio: 3.5,
                   children: [
-                    _linkBtn("Исходный код", urlSource), //  _linkBtn("График \$MEE", urlGraph),
+                    _linkBtn("Исходный код", urlSource),
+                    _actionBtn("Контракты монет", _showContractsDialog),                      
                     _actionBtn("О проекте", _showAboutProject),
                     _linkBtn("Обмен \$MEE/APT", urlSwapEarnium),
                     _linkBtn("Чат поддержки", urlSupport),
+                    _linkBtn("График \$MEE", urlGraph),
                   ],
                 ),
                 const SizedBox(height: 12),
