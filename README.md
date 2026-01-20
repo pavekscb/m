@@ -5,7 +5,7 @@
 ---
 
 ## 📱 О приложении
-* **Версия:** 1.0.7 (Alpha) (от 10.01.2026)
+* **Версия:** 1.0.8 (Alpha) (от 20.01.2026)
 * **Платформа:** Android
 * **Минимальная версия Android:** 5.0 (API 21)
 * **Рекомендуемая версия Android:** 11.0+ (API 30+)
@@ -27,6 +27,7 @@
 ---
 06.01.2026 - Добавена раздача монеты $MEGA
 12.01.2026 - Добавлены курсы монет, график цены $MEGA
+12.01.2026 - Добавлен стейкинг $MEGA/
 ------
 
 ## 💻 Инструкция по сборке (Compilation Guide)
@@ -47,15 +48,24 @@ set PUB_CACHE=C:\flutter_pub_cache
 
 Bash
 
+set GRADLE_USER_HOME=C:\gr
+
+set PUB_CACHE=F:\flutter_pub_cache
+
+cd /d C:\build\meeiro
+
 # Очистка старых билдов
 flutter clean
 
 # Получение зависимостей
 flutter pub get
 
-# Сборка отладочной версии APK
+# Сборка разных версии APK
 flutter build apk --debug --android-skip-build-dependency-validation
-После завершения файл будет доступен по пути: build/app/outputs/flutter-apk/app-debug.apk
+
+flutter build apk --profile --android-skip-build-dependency-validation
+
+flutter build apk --release --android-skip-build-dependency-validation
 
 📄 Лицензия
 Этот проект распространяется под лицензией MIT. 
