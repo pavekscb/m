@@ -5,15 +5,19 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.10.0-290.4.beta <4.0.0"
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  http: ^1.1.0
+  http: ^1.6.0
   cupertino_icons: ^1.0.8
-  shared_preferences: 2.2.3
-  url_launcher: 6.2.5
+  shared_preferences: ^2.5.4
+  url_launcher: ^6.2.5
+  pinenacl: ^0.6.0
+  app_links: ^7.0.0
+  cryptography: ^2.9.0
+  aptos: ^0.0.1-beta.14
 
 dev_dependencies:
   flutter_test:
@@ -34,4 +38,4 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/GTA.gif                 
+    - assets/GTA.gif               
