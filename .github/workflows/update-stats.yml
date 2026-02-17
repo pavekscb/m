@@ -1,0 +1,34 @@
+name: Update Download Stats
+on:
+  schedule:
+    - cron: '0 0 * * *' # Запуск раз в сутки
+  workflow_dispatch:      # Возможность запустить вручную
+
+jobs:
+  update-badge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch downloads and update JSON
+        run: |
+          # 1. Получаем текущее кол-во загрузок из API
+          CURRENT_COUNT=$(curl -s https://api.github.com/repos/pavekscb/m/releases | jq '[.[].assets[].download_count] | add')
+          
+          # 2. Твоя константа (те самые 100 удаленных загрузок)
+          OFFSET=100
+          
+          # 3. Считаем общую сумму
+          TOTAL=$((CURRENT_COUNT + OFFSET))
+          
+          # 4. Обновляем файл stats.json
+          echo "{\"schemaVersion\": 1, \"label\": \"Total Downloads\", \"message\": \"$TOTAL\", \"color\": \"brightgreen\"}" > stats.json
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add stats.json
+          git commit -m "Update total download count: $(date)" || exit 0
+          git push
