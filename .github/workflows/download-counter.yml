@@ -21,7 +21,7 @@ jobs:
 
       - name: Calculate downloads safely
         run: |
-          BASE=100
+          BASE=0
 
           CURRENT=$(curl -s https://api.github.com/repos/pavekscb/m/releases \
           | jq '[.[].assets[].download_count] | add // 0')
