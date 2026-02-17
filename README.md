@@ -7,6 +7,7 @@
 
 [![Total downloads](https://img.shields.io/github/downloads/pavekscb/m/total?label=Total%20downloads&color=brightgreen)](https://github.com/pavekscb/m/releases)
 
+[![Total Downloads](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pavekscb/m/main/stats.json)](https://github.com/pavekscb/m/releases)
 ---
 
 ## 📱 О приложении
