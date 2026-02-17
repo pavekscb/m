@@ -3,8 +3,8 @@
 **MEE Mining App** — это майнер монеты MEE, MEGA  приложение, разработанное на фреймворке **Flutter**.
 ## 📥 Загрузки
 
-[![Latest release downloads](https://img.shields.io/github/downloads/pavekscb/m/latest/total?label=Latest%20release%20downloads&color=blue)](https://github.com/pavekscb/m/releases/latest) [![Total Downloads](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pavekscb/m/main/stats.json)](https://github.com/pavekscb/m/releases)
----
+[![ВСЕГО ЗАГРУЗОК](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pavekscb/m/main/stats.json)](https://github.com/pavekscb/m/releases)
+--- [![ЗАГРУЗКИ ПОСЛЕДНЕГО РЕЛИЗА](https://img.shields.io/github/downloads/pavekscb/m/latest/total?label=Latest%20release%20downloads&color=blue)](https://github.com/pavekscb/m/releases/latest) 
 
 ## 📱 О приложении
 * **Версия:** 1.1.0 (Alpha) (от 17.02.2026)
