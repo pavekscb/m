@@ -4,6 +4,7 @@
 ## 📥 Загрузки
 
 [![Downloads](https://img.shields.io/github/downloads/pavekscb/m/total)](https://github.com/pavekscb/m/releases)
+![Downloads](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pavekscb/m/main/downloads.json)
 
 ---
 
