@@ -16,7 +16,7 @@ import 'package:pinenacl/api.dart' as pine_api;
 
 
 // --- КОНСТАНТЫ ПРИЛОЖЕНИЯ И ВЕРСИИ ---
-const String currentVersion = "1.0.9"; 
+const String currentVersion = "1.1.0"; 
 const String urlGithubApi = "https://api.github.com/repos/pavekscb/m/releases/latest";
 
 const String walletKey = "WALLET_ADDRESS"; 
@@ -33,6 +33,7 @@ const String aptCoinType = "0x1::aptos_coin::AptosCoin";
 const String megaCoinType = "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3::mega_coin::MEGA";
 
 const String aptLedgerUrl = "https://fullnode.mainnet.aptoslabs.com/v1";
+const String poolUrl = "https://fullnode.mainnet.aptoslabs.com/v1/accounts/0xc7efb4076dbe143cbcd98cfaaa929ecfc8f299203dfff63b95ccb6bfe19850fa/resource/0xc7efb4076dbe143cbcd98cfaaa929ecfc8f299203dfff63b95ccb6bfe19850fa::swap::TokenPairMetadata<0x1::aptos_coin::AptosCoin,0xe9c192ff55cffab3963c695cff6dbf9dad6aff2bb5ac19a6415cad26a81860d9::mee_coin::MeeCoin>";
 const String harvestBaseUrl = "https://explorer.aptoslabs.com/account/0x514cfb77665f99a2e4c65a5614039c66d13e00e98daf4c86305651d29fd953e5/modules/run/Staking/harvest?network=mainnet";
 const String addMeeUrl = "https://explorer.aptoslabs.com/account/0x514cfb77665f99a2e4c65a5614039c66d13e00e98daf4c86305651d29fd953e5/modules/run/Staking/stake?network=mainnet";
 const String unstakeBaseUrl = "https://explorer.aptoslabs.com/account/0x514cfb77665f99a2e4c65a5614039c66d13e00e98daf4c86305651d29fd953e5/modules/run/Staking/unstake?network=mainnet";
@@ -49,6 +50,15 @@ const String lastPetraAddressKey = "LAST_PETRA_ADDRESS"; // Ключ для хр
 const String manualAddressKey = "MANUAL_WALLET_ADDRESS";
 
 void main() {
+  // 
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    // В дебаг-режиме можно выводить ошибку в консоль, чтобы знать, что чинить
+    debugPrint(details.toString());
+    // Возвращаем пустой контейнер вместо красного экрана
+    return const SizedBox.shrink(); 
+  };
+  // -----------------------
+  
   runApp(const MeeiroApp());
 }
 
@@ -139,7 +149,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
  
   String? _petraAddress; // Именно это имя используется в твоем UI
 
- 
+  bool isAptToMeeDirection = true;
+  bool isMegaToAptDirection = true;
+  
+  bool isMegaDirection = false;
+
 
   Widget _buildUnlockCountdown() {
     if (unlockingStartTime == null) return const SizedBox();
@@ -460,6 +474,633 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     },
   );
 }
+
+////////////// #swap   ( _showSwapDialog  _swapAptToMee  _swapMeeToApt )
+
+Future<void> _showSwapDialog() async {
+  final TextEditingController inputController = TextEditingController();
+  final TextEditingController outputController = TextEditingController();
+
+  const int decimalsApt = 8;
+  const int decimalsMee = 6;
+
+  BigInt reserveAptRaw = BigInt.zero;
+  BigInt reserveMeeRaw = BigInt.zero;
+  bool poolDataLoaded = false;
+
+  try {
+    final response = await http.get(Uri.parse(poolUrl)).timeout(const Duration(seconds: 5));
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body)['data'];
+      reserveAptRaw = BigInt.parse(data['balance_x']['value'] ?? '0');
+      reserveMeeRaw = BigInt.parse(data['balance_y']['value'] ?? '0');
+      poolDataLoaded = true;
+    }
+  } catch (e) {
+    debugPrint("Ошибка пула: $e");
+  }
+
+  void recalculate() {
+    final double inputVal = double.tryParse(inputController.text) ?? 0.0;
+    if (inputVal <= 0) {
+      outputController.text = "0.000000";
+      return;
+    }
+
+    double outputVal = 0.0;
+
+    if (isMegaDirection) {
+        final double megaPriceInApt = _getMegaPriceInApt();
+        // НОВАЯ ЛОГИКА РАСЧЕТА:
+        if (isMegaToAptDirection) {
+          // MEGA -> APT
+          outputVal = inputVal * megaPriceInApt;
+        } else {
+          // APT -> MEGA
+          outputVal = megaPriceInApt > 0 ? inputVal / megaPriceInApt : 0.0;
+        }
+      } else if (poolDataLoaded && reserveAptRaw > BigInt.zero && reserveMeeRaw > BigInt.zero) {
+      if (isAptToMeeDirection) {
+        final BigInt inRaw = BigInt.from((inputVal * pow(10, decimalsApt)).round());
+        final BigInt inFee = inRaw * BigInt.from(997);
+        final BigInt num = inFee * reserveMeeRaw;
+        final BigInt den = reserveAptRaw * BigInt.from(1000) + inFee;
+        outputVal = num.toDouble() / den.toDouble() / pow(10, decimalsMee);
+      } else {
+        final BigInt inRaw = BigInt.from((inputVal * pow(10, decimalsMee)).round());
+        final BigInt inFee = inRaw * BigInt.from(997);
+        final BigInt num = inFee * reserveAptRaw;
+        final BigInt den = reserveMeeRaw * BigInt.from(1000) + inFee;
+        outputVal = num.toDouble() / den.toDouble() / pow(10, decimalsApt);
+      }
+    } else {
+      if (isAptToMeeDirection) {
+        outputVal = inputVal * priceApt / priceMee * pow(10, decimalsApt - decimalsMee);
+      } else {
+        outputVal = inputVal * priceMee / priceApt * pow(10, decimalsMee - decimalsApt);
+      }
+    }
+
+    outputController.text = outputVal.toStringAsFixed(6);
+  }
+
+  inputController.addListener(recalculate);
+  recalculate();
+
+  if (!mounted) return;
+
+  await showDialog(
+    context: context,
+    builder: (BuildContext dialogCtx) {
+      return StatefulBuilder(
+        builder: (context, setDialogState) {
+          final bool isMegaMode = isMegaDirection;
+
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1A1A1A),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(15),
+              side: const BorderSide(color: Colors.blueAccent, width: 1.5),
+            ),
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Обернули текст в Expanded, чтобы он не "взрывал" строку
+                Expanded( 
+                  child: Text(
+                    isMegaMode
+                        ? (isMegaToAptDirection ? "Обмен MEGA → APT" : "Обмен APT → MEGA")
+                        : (isAptToMeeDirection ? "Обмен APT → MEE" : "Обмен MEE → APT"),
+                    style: TextStyle(
+                      color: isMegaMode ? Colors.greenAccent : Colors.blueAccent,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16, // Немного уменьшил с 18 до 16 для надежности
+                    ),
+                    softWrap: true, // Разрешаем перенос на вторую строку, если экран очень узкий
+                  ),
+                ),
+                // Кнопка остается на месте
+                IconButton(
+                  padding: EdgeInsets.zero, // Убираем лишние отступы у кнопки, чтобы сэкономить место
+                  constraints: const BoxConstraints(),
+                  icon: const Icon(Icons.swap_horiz, color: Colors.cyanAccent, size: 28),
+                  onPressed: () {
+                    setDialogState(() {
+                      if (isMegaMode) {
+                        isMegaToAptDirection = !isMegaToAptDirection;
+                      } else {
+                        isAptToMeeDirection = !isAptToMeeDirection;
+                      }
+                      inputController.clear();
+                      outputController.clear();
+                      recalculate();
+                    });
+                  },
+                ),
+              ],
+            ),
+            //// правка
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Курс
+                  Text(
+                    isMegaMode
+                        ? (isMegaToAptDirection 
+                            ? "1 MEGA ≈ ${_getMegaPriceInApt().toStringAsFixed(6)} APT" 
+                            : "1 APT ≈ ${(1 / _getMegaPriceInApt()).toStringAsFixed(2)} MEGA")
+                        : poolDataLoaded
+                            ? isAptToMeeDirection
+                                ? "1 APT ≈ ${(reserveMeeRaw.toDouble() / reserveAptRaw.toDouble() * pow(10, 8 - 6)).toStringAsFixed(6)} MEE"
+                                : "1 MEE ≈ ${(reserveAptRaw.toDouble() / reserveMeeRaw.toDouble() * pow(10, 6 - 8)).toStringAsFixed(6)} APT"
+                            : isAptToMeeDirection
+                                ? "≈ ${(priceApt / priceMee).toStringAsFixed(6)} MEE"
+                                : "≈ ${(priceMee / priceApt).toStringAsFixed(6)} APT",
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Поле ввода
+                  Text(
+                    isMegaMode
+                        ? (isMegaToAptDirection ? "Ввод MEGA:" : "Ввод APT:")
+                        : (isAptToMeeDirection ? "Ввод APT:" : "Ввод MEE:"),
+                    style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: inputController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      hintText: "0.0",
+                      prefixText: isMegaMode
+                          ? (isMegaToAptDirection ? "MEGA: " : "APT: ")
+                          : (isAptToMeeDirection ? "APT: " : "MEE: "),
+                      prefixStyle: TextStyle(
+                        color: isMegaMode
+                            ? (isMegaToAptDirection ? Colors.greenAccent : Colors.blueAccent)
+                            : (isAptToMeeDirection ? Colors.blueAccent : Colors.cyanAccent),
+                        fontSize: 16,
+                      ),
+                      filled: true,
+                      fillColor: const Color(0xFF2C2C2C),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+
+                  const SizedBox(height: 28),
+
+                  // Балансы в столбик
+                  // Балансы в столбик
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // --- APT ---
+                      GestureDetector(
+                        onTap: () {
+                          if (aptOnChain > 0) {
+                            inputController.text = aptOnChain.toStringAsFixed(6);
+                            setDialogState(() {
+                              if (isMegaMode) {
+                                isMegaToAptDirection = false;
+                              } else {
+                                isMegaDirection = false;
+                                isAptToMeeDirection = true;
+                              }
+                              recalculate();
+                            });
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Row( // Обернули в Row
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Image.asset('assets/apt.png', width: 20, height: 20), // Иконка APT
+                              const SizedBox(width: 8), // Отступ между иконкой и текстом
+                              Text(
+                                "APT: ${aptOnChain.toStringAsFixed(6)}",
+                                style: TextStyle(
+                                  color: aptOnChain > 0 ? Colors.blueAccent : Colors.grey,
+                                  fontSize: 13,
+                                  decoration: aptOnChain > 0 ? TextDecoration.underline : null,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      // --- MEE ---
+                      GestureDetector(
+                        onTap: () {
+                          if (meeOnChain > 0) {
+                            inputController.text = meeOnChain.toStringAsFixed(6);
+                            setDialogState(() {
+                              isMegaDirection = false;
+                              isAptToMeeDirection = false;
+                              recalculate();
+                            });
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Row( // Обернули в Row
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Image.asset('assets/mee.png', width: 20, height: 20), // Иконка MEE
+                              const SizedBox(width: 8),
+                              Text(
+                                "MEE: ${meeOnChain.toStringAsFixed(6)}",
+                                style: TextStyle(
+                                  color: meeOnChain > 0 ? Colors.cyanAccent : Colors.grey,
+                                  fontSize: 13,
+                                  decoration: meeOnChain > 0 ? TextDecoration.underline : null,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      // --- MEGA ---
+                      GestureDetector(
+                        onTap: () {
+                          if (megaOnChain > 0) {
+                            inputController.text = megaOnChain.toStringAsFixed(8);
+                            setDialogState(() {
+                              isMegaDirection = true;
+                              isMegaToAptDirection = true;
+                              recalculate();
+                            });
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Row( // Обернули в Row
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Image.asset('assets/mega.png', width: 20, height: 20), // Иконка MEGA
+                              const SizedBox(width: 8),
+                              Text(
+                                "MEGA: ${megaOnChain.toStringAsFixed(8)}",
+                                style: TextStyle(
+                                  color: megaOnChain > 0 ? Colors.greenAccent : Colors.grey,
+                                  fontSize: 13,
+                                  decoration: megaOnChain > 0 ? TextDecoration.underline : null,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 24),
+
+                  // Поле получаете
+                  Text(
+                    isMegaMode
+                        ? (isMegaToAptDirection ? "Получаете APT:" : "Получаете MEGA:")
+                        : (isAptToMeeDirection ? "Получаете MEE:" : "Получаете APT:"),
+                    style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: outputController,
+                    enabled: false,
+                    decoration: InputDecoration(
+                      hintText: "0.000000",
+                      prefixText: isMegaMode
+                          ? (isMegaToAptDirection ? "APT: " : "MEGA: ")
+                          : (isAptToMeeDirection ? "MEE: " : "APT: "),
+                      prefixStyle: TextStyle(
+                        color: isMegaMode
+                            ? (isMegaToAptDirection ? Colors.blueAccent : Colors.greenAccent)
+                            : (isAptToMeeDirection ? Colors.cyanAccent : Colors.blueAccent),
+                        fontSize: 16,
+                      ),
+                      filled: true,
+                      fillColor: const Color(0xFF2C2C2C),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    style: const TextStyle(color: Colors.greenAccent, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+
+                  const SizedBox(height: 20),
+                  Text(
+                    isMegaMode
+                        ? "Примерный расчёт по цене MEGA"
+                        : poolDataLoaded
+                            ? "Расчёт по пулу • комиссия 0.3%"
+                            : "Примерный расчёт по ценам",
+                    style: const TextStyle(color: Colors.white54, fontSize: 11),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+            //// 
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogCtx),
+                style: TextButton.styleFrom(foregroundColor: Colors.blueAccent),
+                child: const Text("Закрыть"),
+              ),
+              if (isPetraConnected)
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.swap_horiz),
+                  label: const Text("Обмен в Petra"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isMegaMode ? Colors.grey.shade700 : Colors.green.shade700,
+                    foregroundColor: isMegaMode ? Colors.white70 : Colors.white,
+                  ),
+                  onPressed: isMegaMode
+                      ? null
+                      : () {
+                          final double amount = double.tryParse(inputController.text) ?? 0.0;
+                          if (amount <= 0) return;
+                          Navigator.pop(dialogCtx);
+                          if (isAptToMeeDirection) {
+                            _swapAptToMee(amount);
+                          } else {
+                            _swapMeeToApt(amount);
+                          }
+                        },
+                ),
+            ],
+          );
+        },
+      );
+    },
+  ).then((_) {
+    inputController.removeListener(recalculate);
+    Future.delayed(Duration.zero, () {
+      inputController.dispose();
+      outputController.dispose();
+    });
+  });
+}
+///// swap apt - mee
+
+Future<void> _swapAptToMee(double amount) async {
+  if (!isPetraConnected) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Подключите Petra для обмена")),
+    );
+    return;
+  }
+
+  // --- ПРОВЕРКа 0.20 apt ---
+  if (aptOnChain < 0.20) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar( 
+        content: const Text("❌ Недостаточно APT для газа. Petra требует минимум 0.20 APT на балансе."),
+        backgroundColor: Colors.orange.shade900,
+      ),
+    );
+    return;
+  }
+
+
+
+  if (_myKeyPair == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Ошибка: Ключи не инициализированы. Переподключите кошелек.")),
+    );
+    return;
+  }
+
+  if (amount <= 0.0009) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Минимальная сумма: 0.001 APT")),
+    );
+    return;
+  }
+  final double safeAmount = amount; // убираем запас на газ - 0.001;
+
+  final prefs = await SharedPreferences.getInstance();
+  final petraKeyHex = prefs.getString('petra_saved_pub_key');
+  final savedPrivKey = prefs.getString('petra_temp_priv_key');
+
+  if (petraKeyHex == null || savedPrivKey == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Ошибка ключей. Переподключите кошелек.")),
+    );
+    return;
+  }
+
+  try {
+    // Загружаем резервы пула для расчёта min_out
+    BigInt reserveAptRaw = BigInt.zero;
+    BigInt reserveMeeRaw = BigInt.zero;
+
+    final poolResponse = await http.get(Uri.parse(poolUrl)).timeout(const Duration(seconds: 5));
+    if (poolResponse.statusCode == 200) {
+      final data = json.decode(poolResponse.body)['data'];
+      reserveAptRaw = BigInt.parse(data['balance_x']['value'] ?? '0');
+      reserveMeeRaw = BigInt.parse(data['balance_y']['value'] ?? '0');
+    }
+
+    // Рассчитываем amount_out_min (с 1% slippage)
+    BigInt amountOutMinRaw = BigInt.zero;
+    if (reserveAptRaw > BigInt.zero && reserveMeeRaw > BigInt.zero) {
+      final BigInt amountInRaw = BigInt.from((safeAmount * pow(10, decimals)).round());
+      final BigInt amountInWithFee = amountInRaw * BigInt.from(997); // 0.3% fee
+      final BigInt numerator = amountInWithFee * reserveMeeRaw;
+      final BigInt denominator = reserveAptRaw * BigInt.from(1000) + amountInWithFee;
+      final double estimatedOut = numerator.toDouble() / denominator.toDouble() / pow(10, 6);
+      amountOutMinRaw = BigInt.from(estimatedOut * 0.99 * pow(10, 6)); // 1% slippage
+    }
+
+    // Payload — только 2 аргумента!
+    final txObject = {
+      "type": "entry_function_payload",
+      "function": "0xc7efb4076dbe143cbcd98cfaaa929ecfc8f299203dfff63b95ccb6bfe19850fa::router::swap_exact_input",
+      "type_arguments": [aptCoinType, meeCoinT0T1],
+      "arguments": [
+        (safeAmount * pow(10, decimals)).toInt().toString(),  // x_in: u64
+        amountOutMinRaw.toString(),                           // y_min_out: u64
+      ],
+    };
+
+    final innerJsonString = jsonEncode(txObject);
+    final innerBase64 = base64.encode(utf8.encode(innerJsonString));
+
+    // Шифрование и запуск Petra
+    final myPrivKey = pine.PrivateKey(base64.decode(savedPrivKey));
+    final petraPubKey = pine.PublicKey(_hexToBytes(petraKeyHex));
+
+    final box = pine.Box(myPrivateKey: myPrivKey, theirPublicKey: petraPubKey);
+    final nonce = pine.PineNaClUtils.randombytes(24);
+    final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
+
+    final pubKey = await _myKeyPair!.extractPublicKey();
+    final myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+
+    final finalRequest = {
+      "appInfo": {"name": "Meeiro", "domain": "https://meeiro.io"},
+      "dappEncryptionPublicKey": myPubKeyHex,
+      "nonce": _bytesToHex(Uint8List.fromList(nonce)),
+      "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
+      "redirectLink": "meeiro://api/v1/swap_apt_mee",
+    };
+
+    final dataParam = base64.encode(utf8.encode(jsonEncode(finalRequest)));
+    final url = Uri.parse("petra://api/v1/signAndSubmit?data=$dataParam");
+
+    await launchUrl(url, mode: LaunchMode.externalApplication);
+
+    final double minOutDisplay = amountOutMinRaw.toDouble() / pow(10, 6);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          "Своп запущен: $safeAmount APT → MEE (мин: ${minOutDisplay.toStringAsFixed(2)})"
+        ),
+        backgroundColor: Colors.green.shade800,
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  } catch (e) {
+    debugPrint("Swap Error: $e");
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Ошибка: $e"), backgroundColor: Colors.red.shade800),
+    );
+  }
+}
+////
+
+///// swap mee - apt
+
+Future<void> _swapMeeToApt(double amount) async {
+  if (!isPetraConnected) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Подключите Petra для обмена")),
+    );
+    return;
+  }
+
+  // Минимальный баланс MEE для газа + обмен
+  if (meeOnChain < amount + 0.1) {  // небольшой запас
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("❌ Недостаточно MEE. Требуется минимум ${amount.toStringAsFixed(2)} + запас на газ"),
+        backgroundColor: Colors.orange.shade900,
+      ),
+    );
+    return;
+  }
+
+  if (_myKeyPair == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Ключи не инициализированы. Переподключите кошелек.")),
+    );
+    return;
+  }
+
+  if (amount <= 0.9) {  // примерный минимум, можно изменить
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Минимальная сумма: 1 MEE")),
+    );
+    return;
+  }
+
+  final double safeAmount = amount;
+
+  final prefs = await SharedPreferences.getInstance();
+  final petraKeyHex = prefs.getString('petra_saved_pub_key');
+  final savedPrivKey = prefs.getString('petra_temp_priv_key');
+
+  if (petraKeyHex == null || savedPrivKey == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Ошибка ключей. Переподключите кошелек.")),
+    );
+    return;
+  }
+
+  try {
+    // Загружаем пул заново (для свежести)
+    BigInt reserveAptRaw = BigInt.zero;
+    BigInt reserveMeeRaw = BigInt.zero;
+    final poolResponse = await http.get(Uri.parse(poolUrl)).timeout(const Duration(seconds: 5));
+    if (poolResponse.statusCode == 200) {
+      final data = json.decode(poolResponse.body)['data'];
+      reserveAptRaw = BigInt.parse(data['balance_x']['value'] ?? '0');
+      reserveMeeRaw = BigInt.parse(data['balance_y']['value'] ?? '0');
+    }
+
+    // Рассчитываем минимальный выход APT с 1% slippage
+    BigInt amountOutMinRaw = BigInt.zero;
+    if (reserveAptRaw > BigInt.zero && reserveMeeRaw > BigInt.zero) {
+      final BigInt amountInRaw = BigInt.from((safeAmount * pow(10, 6)).round());
+      final BigInt amountInWithFee = amountInRaw * BigInt.from(997);
+      final BigInt numerator = amountInWithFee * reserveAptRaw;
+      final BigInt denominator = reserveMeeRaw * BigInt.from(1000) + amountInWithFee;
+      final double estimatedOut = numerator.toDouble() / denominator.toDouble() / pow(10, 8);
+      amountOutMinRaw = BigInt.from(estimatedOut * 0.99 * pow(10, 8)); // 1% slippage
+    }
+
+    // Payload для MEE → APT
+    final txObject = {
+      "type": "entry_function_payload",
+      "function": "0xc7efb4076dbe143cbcd98cfaaa929ecfc8f299203dfff63b95ccb6bfe19850fa::router::swap_exact_input",
+      "type_arguments": [meeCoinT0T1, aptCoinType],  // ← порядок изменён!
+      "arguments": [
+        (safeAmount * pow(10, 6)).toInt().toString(), // x_in (MEE)
+        amountOutMinRaw.toString(),                   // y_min_out (APT)
+      ],
+    };
+
+    final innerJsonString = jsonEncode(txObject);
+    final innerBase64 = base64.encode(utf8.encode(innerJsonString));
+
+    final myPrivKey = pine.PrivateKey(base64.decode(savedPrivKey));
+    final petraPubKey = pine.PublicKey(_hexToBytes(petraKeyHex));
+    final box = pine.Box(myPrivateKey: myPrivKey, theirPublicKey: petraPubKey);
+    final nonce = pine.PineNaClUtils.randombytes(24);
+    final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
+
+    final pubKey = await _myKeyPair!.extractPublicKey();
+    final myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+
+    final finalRequest = {
+      "appInfo": {"name": "Meeiro", "domain": "https://meeiro.io"},
+      "dappEncryptionPublicKey": myPubKeyHex,
+      "nonce": _bytesToHex(Uint8List.fromList(nonce)),
+      "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
+      "redirectLink": "meeiro://api/v1/swap_mee_apt",  // можно изменить для логов
+    };
+
+    final dataParam = base64.encode(utf8.encode(jsonEncode(finalRequest)));
+    final url = Uri.parse("petra://api/v1/signAndSubmit?data=$dataParam");
+
+    await launchUrl(url, mode: LaunchMode.externalApplication);
+
+    final double minOutDisplay = amountOutMinRaw.toDouble() / pow(10, 8);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          "Своп запущен: $safeAmount MEE → APT (мин: ${minOutDisplay.toStringAsFixed(6)})",
+        ),
+        backgroundColor: Colors.green.shade800,
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  } catch (e) {
+    debugPrint("Swap MEE→APT error: $e");
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Ошибка обмена: $e"), backgroundColor: Colors.red.shade800),
+    );
+  }
+}
+
+
+
 
 //////////////////////////////////////// wallet connect
 
@@ -1383,6 +2024,137 @@ Future<void> _unstakeMee(int unstakeType) async {
   }
 }
 
+/// #swap ( _swapAptToMee )
+/*
+Future<void> _swapAptToMee(double amount) async {
+  if (!isPetraConnected) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Подключите Petra для обмена")),
+    );
+    return;
+  }
+
+  // --- ПРОВЕРКа 0.20 apt ---
+  if (aptOnChain < 0.20) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar( 
+        content: const Text("❌ Недостаточно APT для газа. Petra требует минимум 0.20 APT на балансе."),
+        backgroundColor: Colors.orange.shade900,
+      ),
+    );
+    return;
+  }
+
+
+
+  if (_myKeyPair == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Ошибка: Ключи не инициализированы. Переподключите кошелек.")),
+    );
+    return;
+  }
+
+  if (amount <= 0.0009) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Минимальная сумма: 0.001 APT")),
+    );
+    return;
+  }
+  final double safeAmount = amount; // убираем запас на газ - 0.001;
+
+  final prefs = await SharedPreferences.getInstance();
+  final petraKeyHex = prefs.getString('petra_saved_pub_key');
+  final savedPrivKey = prefs.getString('petra_temp_priv_key');
+
+  if (petraKeyHex == null || savedPrivKey == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Ошибка ключей. Переподключите кошелек.")),
+    );
+    return;
+  }
+
+  try {
+    // Загружаем резервы пула для расчёта min_out
+    BigInt reserveAptRaw = BigInt.zero;
+    BigInt reserveMeeRaw = BigInt.zero;
+
+    final poolResponse = await http.get(Uri.parse(poolUrl)).timeout(const Duration(seconds: 5));
+    if (poolResponse.statusCode == 200) {
+      final data = json.decode(poolResponse.body)['data'];
+      reserveAptRaw = BigInt.parse(data['balance_x']['value'] ?? '0');
+      reserveMeeRaw = BigInt.parse(data['balance_y']['value'] ?? '0');
+    }
+
+    // Рассчитываем amount_out_min (с 1% slippage)
+    BigInt amountOutMinRaw = BigInt.zero;
+    if (reserveAptRaw > BigInt.zero && reserveMeeRaw > BigInt.zero) {
+      final BigInt amountInRaw = BigInt.from((safeAmount * pow(10, decimals)).round());
+      final BigInt amountInWithFee = amountInRaw * BigInt.from(997); // 0.3% fee
+      final BigInt numerator = amountInWithFee * reserveMeeRaw;
+      final BigInt denominator = reserveAptRaw * BigInt.from(1000) + amountInWithFee;
+      final double estimatedOut = numerator.toDouble() / denominator.toDouble() / pow(10, 6);
+      amountOutMinRaw = BigInt.from(estimatedOut * 0.99 * pow(10, 6)); // 1% slippage
+    }
+
+    // Payload — только 2 аргумента!
+    final txObject = {
+      "type": "entry_function_payload",
+      "function": "0xc7efb4076dbe143cbcd98cfaaa929ecfc8f299203dfff63b95ccb6bfe19850fa::router::swap_exact_input",
+      "type_arguments": [aptCoinType, meeCoinT0T1],
+      "arguments": [
+        (safeAmount * pow(10, decimals)).toInt().toString(),  // x_in: u64
+        amountOutMinRaw.toString(),                           // y_min_out: u64
+      ],
+    };
+
+    final innerJsonString = jsonEncode(txObject);
+    final innerBase64 = base64.encode(utf8.encode(innerJsonString));
+
+    // Шифрование и запуск Petra
+    final myPrivKey = pine.PrivateKey(base64.decode(savedPrivKey));
+    final petraPubKey = pine.PublicKey(_hexToBytes(petraKeyHex));
+
+    final box = pine.Box(myPrivateKey: myPrivKey, theirPublicKey: petraPubKey);
+    final nonce = pine.PineNaClUtils.randombytes(24);
+    final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
+
+    final pubKey = await _myKeyPair!.extractPublicKey();
+    final myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+
+    final finalRequest = {
+      "appInfo": {"name": "Meeiro", "domain": "https://meeiro.io"},
+      "dappEncryptionPublicKey": myPubKeyHex,
+      "nonce": _bytesToHex(Uint8List.fromList(nonce)),
+      "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
+      "redirectLink": "meeiro://api/v1/swap_apt_mee",
+    };
+
+    final dataParam = base64.encode(utf8.encode(jsonEncode(finalRequest)));
+    final url = Uri.parse("petra://api/v1/signAndSubmit?data=$dataParam");
+
+    await launchUrl(url, mode: LaunchMode.externalApplication);
+
+    final double minOutDisplay = amountOutMinRaw.toDouble() / pow(10, 6);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          "Своп запущен: $safeAmount APT → MEE (мин: ${minOutDisplay.toStringAsFixed(2)})"
+        ),
+        backgroundColor: Colors.green.shade800,
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  } catch (e) {
+    debugPrint("Swap Error: $e");
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Ошибка: $e"), backgroundColor: Colors.red.shade800),
+    );
+  }
+}
+
+*/
+/////
+
 void _showUnstakeChoiceDialog() {
   showDialog(
     context: context,
@@ -1607,6 +2379,8 @@ Future<void> _withdrawMee() async {
 
 /// конец mee
 
+
+/*
 void _initDeepLinks() {
   _linkSubscription = _appLinks.uriLinkStream.listen((uri) {
     if (uri.scheme == 'meeiro') {
@@ -1641,8 +2415,71 @@ void _initDeepLinks() {
     }
   });
 }
+*/
 
+void _initDeepLinks() {
+  _linkSubscription = _appLinks.uriLinkStream.listen((uri) {
+    if (!mounted) return;
 
+    debugPrint('DEBUG: Пришел диплинк: ${uri.path}');
+
+    if (uri.scheme == 'meeiro') {
+      if (uri.path.contains('connect')) {
+        _handlePetraConnectResponse(uri);
+      } 
+      // Проверяем наличие слова swap или любого из твоих путей
+      else if (uri.path.contains('swap') || 
+               uri.path.contains('harvest') || 
+               uri.path.contains('stake') || 
+               uri.path.contains('claim') || 
+               uri.path.contains('unstake') || 
+               uri.path.contains('stake_mee') || 
+               uri.path.contains('harvest_mee') ||
+               uri.path.contains('unstake_mee_main') ||
+               uri.path.contains('cancel_unstake_mee') ||
+               uri.path.contains('withdraw_mee_final') ||
+               uri.path.contains('cancel')) { 
+        
+        // 1. Показываем уведомление с колесиком
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2, 
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.greenAccent), // Сделаем колесико в цвет кометы
+                  ),
+                ),
+                const SizedBox(width: 15),
+                const Expanded(
+                  child: Text(
+                    "Транзакция отправлена! Обновляю балансы...",
+                    style: TextStyle(color: Colors.white), // Белый текст на темном фоне
+                  ),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 5),
+            backgroundColor: const Color(0xFF1A1A1A).withOpacity(0.9), // Темный фон (почти черный)
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        );
+
+        // 2. Ждем 5 секунд, чтобы блокчейн точно обновился
+        Future.delayed(const Duration(seconds: 5), () {
+          if (mounted) {
+            debugPrint('DEBUG: Запускаю обновление данных после паузы...');
+            _runUpdateThread(); 
+          }
+        });
+      }
+    }
+  });
+}
 
 
 
@@ -3168,7 +4005,7 @@ Widget _helpStep({
                       const SizedBox(height: 6),
                       // Text(onChainBalancesText, style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w500)),
                      
-
+                      /* 
                       Text.rich(
                         TextSpan(
                           style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w500),
@@ -3208,13 +4045,107 @@ Widget _helpStep({
                           ],
                         ),
                       ),
+                     */
+                      Text.rich(
+                        TextSpan(
+                          style: const TextStyle(fontSize: 13, color: Colors.white70, fontWeight: FontWeight.w500),
+                          children: [
+                            // --- APT ---
+                            WidgetSpan(
+                              alignment: PlaceholderAlignment.middle, // Выравнивание иконки по центру текста
+                              child: Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Image.asset('assets/apt.png', width: 20, height: 20),
+                              ),
+                            ),
+                            const TextSpan(text: "\$APT", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            TextSpan(text: ": ${aptOnChain.toStringAsFixed(8)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            const TextSpan(text: " (", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "\$${priceApt}", style: const TextStyle(color: Colors.greenAccent)),
+                            const TextSpan(text: " / ", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "\$${(aptOnChain * priceApt).toStringAsFixed(4)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                            const TextSpan(text: ") ", style: TextStyle(color: Colors.greenAccent)),
+
+                            // Разделитель
+                            const TextSpan(text: "| ", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)),
+
+                            // --- MEE ---
+                            WidgetSpan(
+                              alignment: PlaceholderAlignment.middle,
+                              child: Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Image.asset('assets/mee.png', width: 20, height: 20),
+                              ),
+                            ),
+                            const TextSpan(text: "\$MEE", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            TextSpan(text: ": ${meeOnChain.toStringAsFixed(6)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            const TextSpan(text: " (", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "\$${priceMee.toStringAsFixed(6)}", style: const TextStyle(color: Colors.greenAccent)),
+                            const TextSpan(text: " / ", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "\$${(meeOnChain * priceMee).toStringAsFixed(6)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                            const TextSpan(text: ") ", style: TextStyle(color: Colors.greenAccent)),
+
+                            // Разделитель
+                            const TextSpan(text: "| ", style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold)),
+
+                            // --- MEGA ---
+                            WidgetSpan(
+                              alignment: PlaceholderAlignment.middle,
+                              child: Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Image.asset('assets/mega.png', width: 20, height: 20),
+                              ),
+                            ),
+                            const TextSpan(text: "\$MEGA", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            TextSpan(text: ": ${megaOnChain.toStringAsFixed(8)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                            const TextSpan(text: " (", style: TextStyle(color: Colors.greenAccent)),
+                            TextSpan(text: "\$${(megaOnChain * _getMegaCurrentPrice() * priceApt).toStringAsFixed(4)}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                            const TextSpan(text: ")", style: TextStyle(color: Colors.greenAccent)),
+                          ],
+                        ),
+                      ),
 
 
                       const SizedBox(height: 8),
+                      /*
                       SizedBox(width: double.infinity, height: 35, child: ElevatedButton(
                         style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey.shade900, foregroundColor: Colors.white),
                         onPressed: _openCustomEditWalletDialog, child: const Text("Сменить кошелек", style: TextStyle(fontSize: 12)),
-                      ))
+                      ))*/
+                     
+                      Row(
+                        children: [
+                          // Кнопка "Сменить кошелек" (теперь фиксированная ширина, меньше)
+                          SizedBox(
+                            width: 140,  // Фиксированная ширина, чтобы кнопка была компактной
+                            height: 35,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blueGrey.shade900, 
+                                foregroundColor: Colors.white,
+                              ),
+                              onPressed: _openCustomEditWalletDialog, 
+                              child: const Text("Сменить кошелек", style: TextStyle(fontSize: 12)),
+                            ),
+                          ),
+                          const SizedBox(width: 8),  // Отступ между кнопками
+                          // Новая кнопка "Обмен" с иконкой
+                          SizedBox(
+                            height: 35,
+                            child: ElevatedButton.icon(
+                              onPressed: _showSwapDialog,  // Вызов новой функции
+                              icon: const Icon(Icons.swap_horiz, size: 16),  // Иконка обмена (стрелки)
+                              label: const Text("Обмен", style: TextStyle(fontSize: 12)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blueGrey.shade900,  // Тот же стиль, что у соседней
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),  // Компактный padding
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+
                     ],
                   )
                 ),
