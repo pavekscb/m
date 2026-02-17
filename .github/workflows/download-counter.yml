@@ -19,18 +19,37 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Get total download count
+      - name: Calculate downloads safely
         run: |
-          TOTAL=$(curl -s https://api.github.com/repos/pavekscb/m/releases \
+          BASE=500
+
+          CURRENT=$(curl -s https://api.github.com/repos/pavekscb/m/releases \
           | jq '[.[].assets[].download_count] | add // 0')
-          echo "Total downloads: $TOTAL"
+
+          CURRENT_TOTAL=$((BASE + CURRENT))
+
+          if [ -f downloads.json ]; then
+            PREVIOUS=$(jq -r '.message' downloads.json)
+          else
+            PREVIOUS=0
+          fi
+
+          if [ "$CURRENT_TOTAL" -gt "$PREVIOUS" ]; then
+            FINAL=$CURRENT_TOTAL
+          else
+            FINAL=$PREVIOUS
+          fi
+
+          echo "Previous: $PREVIOUS"
+          echo "Current: $CURRENT_TOTAL"
+          echo "Final: $FINAL"
 
           echo "{\"schemaVersion\":1,\
           \"label\":\"downloads\",\
-          \"message\":\"$TOTAL\",\
+          \"message\":\"$FINAL\",\
           \"color\":\"blue\"}" > downloads.json
 
-      - name: Commit and push if changed
+      - name: Commit if changed
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
