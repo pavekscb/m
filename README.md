@@ -6,7 +6,7 @@
 [![DOWNLOADS](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pavekscb/m/main/stats.json)](https://github.com/pavekscb/m/releases) [![DOWNLOADS LATEST](https://img.shields.io/github/downloads/pavekscb/m/latest/total?label=Latest%20release%20downloads&color=blue)](https://github.com/pavekscb/m/releases/latest) 
 
 ## 📱 О приложении
-* **Версия:** 1.1.0 (Alpha) (от 17.02.2026)
+* **Версия:** 1.1.1 (Alpha) (от 11.03.2026)
 * **Платформа:** Android
 * **Минимальная версия Android:** 5.0 (API 21)
 * **Рекомендуемая версия Android:** 11.0+ (API 30+)
@@ -35,6 +35,9 @@
 01.02.2026 - Добавлено подключение кошелька Petra.
 
 17.02.2026 - Добавлен обмен монет.
+
+11.03.2026 - Добавлена биржа заданий.
+
 
 ------
 
