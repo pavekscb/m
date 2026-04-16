@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -23,7 +24,7 @@ import 'package:convert/convert.dart';  // For hex.encode (you already have this
 
 
 // --- КОНСТАНТЫ ПРИЛОЖЕНИЯ И ВЕРСИИ ---
-const String currentVersion = "1.1.1"; 
+const String currentVersion = "1.1.2"; 
 const String urlGithubApi = "https://api.github.com/repos/pavekscb/m/releases/latest";
 
 const String walletKey = "WALLET_ADDRESS"; 
@@ -49,7 +50,7 @@ const String unstakeBaseUrl = "https://explorer.aptoslabs.com/account/0x514cfb77
 const String urlSource = "https://github.com/pavekscb/m";
 const String urlSwapEarnium = "https://app.panora.exchange/?ref=V94RDWEH#/swap/aptos?pair=MEE-APT";
 const String urlSupport = "https://t.me/cripto_karta";
-const String urlGraph = "https://dexscreener.com/aptos/pcs-167";
+const String urlGraph = "https://www.geckoterminal.com/aptos/pools/899cb684-bdcb-47a6-a6c9-f2b631bba93a";
 
 const String petraConnectedKey = "IS_PETRA_CONNECTED"; //
 const String lastPetraAddressKey = "LAST_PETRA_ADDRESS"; // Ключ для хранения последнего адреса от Petra
@@ -159,10 +160,138 @@ class MeeiroApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFF121212),
         fontFamily: 'Arial',
       ),
-      home: const HomeScreen(),
+      home: const SplashScreen(),
     );
   }
 }
+
+// ══════════════════════════════════════════════════════════════
+// SPLASH SCREEN — анимированная заставка при старте приложения
+// ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// SPLASH SCREEN — показывает GIF, пока HomeScreen грузит данные
+// ══════════════════════════════════════════════════════════════
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _fadeIn;   // плавное появление в начале
+  late Animation<double> _fadeOut;  // плавное исчезновение в конце
+
+  @override
+  void initState() {
+    super.initState();
+
+    // 5с показ GIF + 1.5с исчезновение
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 5000),
+    );
+
+    // Появление: первые 400мс (0%–6%)
+    _fadeIn = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.0, 0.06, curve: Curves.easeIn),
+      ),
+    );
+
+     
+    // Исчезновение: последние 1.5с (77%–100%)
+    _fadeOut = Tween<double>(begin: 1.0, end: 0.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0.77, 1.0, curve: Curves.easeInOut),
+      ),
+    ); 
+
+    _controller.addStatusListener((status) {
+      if (status == AnimationStatus.completed && mounted) {
+        Navigator.of(context).pushReplacement(
+          PageRouteBuilder(
+            pageBuilder: (_, __, ___) => const HomeScreen(),
+            transitionsBuilder: (_, anim, __, child) =>
+                FadeTransition(opacity: anim, child: child),
+            transitionDuration: const Duration(milliseconds: 150),
+          ),
+        );
+      }
+    });
+
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: AnimatedBuilder(
+        animation: _controller,
+        builder: (_, __) => Opacity(
+          opacity: (_fadeIn.value * _fadeOut.value).clamp(0.0, 1.0),
+          child: Container(
+            color: Colors.black,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.greenAccent.withOpacity(0.25),
+                          blurRadius: 60,
+                          spreadRadius: 10,
+                        ),
+                      ],
+                    ),
+                    child: Image.asset(
+                      'assets/3.gif',
+                      width: 280,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                  const Text(
+                    'MEGA',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 3,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'powered by Aptos',
+                    style: TextStyle(
+                      color: Colors.greenAccent.withOpacity(0.7),
+                      fontSize: 13,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+// ══════════════════════════════════════════════════════════════
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -181,6 +310,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   double meeRatePerSec = 0.0;
   int countdownVal = updateIntervalSeconds;
   bool isRunning = false;
+  bool _isRefreshingMee = false; // индикатор обновления вместо "Ошибка"
   
   double unlockingAmount = 0.0;
   int? unlockingStartTime; // Время начала разблокировки (timestamp)
@@ -249,6 +379,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Map<String, DateTime> _taskClickTimes = {}; // taskId -> время клика
   bool _isAppActive = true; // Активно ли приложение сейчас
+  bool _sentToPetraForTx = false; // Ушли в Petra для транзакции
   List<dynamic> _pendingTasks = [];
 
   StateSetter? _setDialogState;
@@ -259,7 +390,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Map<int, List<dynamic>> _pendingSubmissions = {}; // taskId -> список ответов
   int _totalPendingV3 = 0; // Общий счетчик для кнопки
   Map<int, int> _myV3Statuses = {}; // taskId -> status (0: проверка, 1: ок, 2: отказ)
+
+  // ── Фильтры и сортировка заданий ──
+  String _taskFilter = 'all';   // all | active | done | mine | pending | expired | v2 | v3
+  String _taskSort   = 'new';   // new | old | reward
+  bool   _showSortBar = false;  // показывать ли панель сортировки
   
+  bool _isBlockchainUpdating = false; // Флаг для отображения зеленой полоски
 
   Widget _buildUnlockCountdown() {
     if (unlockingStartTime == null) return const SizedBox();
@@ -306,52 +443,202 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       _isAppActive = false;
-      //debugPrint("Пользователь покинул приложение (ушел по ссылке или свернул)");
     } else if (state == AppLifecycleState.resumed) {
       _isAppActive = true;
-      //debugPrint("Пользователь вернулся в приложение");
-      // Здесь можно принудительно обновить диалог, если он открыт
-      _setDialogState?.call(() {}); 
+      _setDialogState?.call(() {});
+      // Если уходили в Petra для транзакции — показываем диалог ожидания
+      if (_sentToPetraForTx) {
+        _sentToPetraForTx = false;
+        _showReturnFromWalletDialog();
+      }
+    }
+  }
+
+  Future<void> _showReturnFromWalletDialog() async {
+    if (!mounted) return;
+     /*
+    // Показываем диалог ожидания
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.greenAccent.withOpacity(0.5)),
+        ),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 8),
+          const CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation(Colors.greenAccent),
+            strokeWidth: 2.5,
+          ),
+          const SizedBox(height: 18),
+          const Text("Вернулись из кошелька",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Text("Ожидаем подтверждение блокчейна...",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white54, fontSize: 13)),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    */
+
+
+    // Ждём немного для подтверждения блокчейна, потом обновляем данные
+    await Future.delayed(const Duration(seconds: 1));
+    await _runUpdateThread();
+    _saveCachedBalances();
+
+    if (mounted) {
+
+
+      Navigator.of(context, rootNavigator: true).pop(); // закрываем диалог ожидания
+      // Показываем диалог успеха
+     /*
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: Colors.greenAccent.withOpacity(0.5)),
+          ),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            const SizedBox(height: 8),
+            const Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 48),
+            const SizedBox(height: 12),
+            const Text("Данные обновлены!",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text("Балансы и стейкинг синхронизированы.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white54, fontSize: 13)),
+            const SizedBox(height: 8),
+          ]),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("OK", style: TextStyle(color: Colors.greenAccent)),
+            ),
+          ],
+        ),
+      ); */
     }
   }
 
 
 
   Future<void> _startApp() async {
-  setState(() => _isInitialLoading = true); // Включили
+  setState(() => _isInitialLoading = true);
   
   await _loadWalletAddress();
 
-//////////////////
   final bool hasValidAddress = currentWalletAddress.isNotEmpty &&
                                currentWalletAddress.length >= 10 &&
                                currentWalletAddress.startsWith("0x");
 
   if (!hasValidAddress) {
-    //debugPrint("🚫 Нет валидного адреса кошелька → лоадер выключаем");
-    
     setState(() => _isInitialLoading = false);
-    
-    
     _showPetraRequiredDialog();
-   
-    
     return;
   }
 
-  // Если адрес нормальный — продолжаем загрузку
-  //debugPrint("✅ Адрес валидный → загружаем данные");
+  // ── Загружаем кэш из памяти и сразу показываем ──
+  await _loadCachedBalances();
+  await _loadCachedTasks(); // восстанавливаем задачи биржи из кэша
+  setState(() => _isInitialLoading = false); // убираем лоадер сразу с кэшем
 
-//////////////////
+  // ── Загружаем актуальные данные из блокчейна в фоне ──
+  _runUpdateThread().then((_) {
+    _saveCachedBalances(); // сохраняем свежие данные в кэш
+  });
+  _fetchMegaTasks();
+  _checkUpdates(manualCheck: false);
+  _startPeriodicTimer();
+}
 
-  await _runUpdateThread(); // ЖДЕМ, пока данные реально загрузятся
+Future<void> _loadCachedBalances() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final cached = prefs.getString('cached_balances_${currentWalletAddress}');
+    if (cached == null) return;
+    final data = jsonDecode(cached) as Map<String, dynamic>;
+    setState(() {
+      aptOnChain       = (data['apt']  as num?)?.toDouble() ?? 0.0;
+      meeOnChain       = (data['mee']  as num?)?.toDouble() ?? 0.0;
+      meeStaked        = (data['meeS'] as num?)?.toDouble() ?? 0.0;
+      megaOnChain      = (data['mega'] as num?)?.toDouble() ?? 0.0;
+      megaStakeBalance = (data['megaS']as num?)?.toDouble() ?? 0.0;
+      priceApt         = (data['pApt'] as num?)?.toDouble() ?? 0.0;
+      priceMee         = (data['pMee'] as num?)?.toDouble() ?? 0.0;
+      meeCurrentReward = (data['rew']  as num?)?.toDouble() ?? 0.0;
+      // Восстанавливаем данные биржи MEGA из кэша
+      if (data['megaStakedRaw'] != null) {
+        try {
+          megaStakedAmountRaw = BigInt.parse(data['megaStakedRaw'] as String);
+        } catch (_) {}
+      }
+      if (data['megaRewardText'] != null) megaRewardText = data['megaRewardText'] as String;
+      if (data['megaRateText']   != null) megaRateText   = data['megaRateText']   as String;
+      // Восстанавливаем текстовые лейблы
+      if (aptOnChain > 0 || meeOnChain > 0) {
+        final balUsd = (meeStaked * priceMee).toStringAsFixed(6);
+        meeBalanceText = "${meeStaked.toStringAsFixed(2)} \$MEE (\$$balUsd)".replaceAll(".", ",");
+        isRunning = true;
+      }
+    });
+  } catch (_) {}
+}
 
-  await _fetchMegaTasks();
+Future<void> _saveCachedBalances() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final data = {
+      'apt':  aptOnChain,
+      'mee':  meeOnChain,
+      'meeS': meeStaked,
+      'mega': megaOnChain,
+      'megaS':megaStakeBalance,
+      'pApt': priceApt,
+      'pMee': priceMee,
+      'rew':  meeCurrentReward,
+      'megaRew': megaCurrentReward.toDouble(),
+      'megaStakedRaw': megaStakedAmountRaw.toString(),
+      'megaRewardText': megaRewardText,
+      'megaRateText':   megaRateText,
+      'ts':   DateTime.now().millisecondsSinceEpoch,
+    };
+    await prefs.setString('cached_balances_${currentWalletAddress}', jsonEncode(data));
+  } catch (_) {}
+  // Сохраняем задачи биржи отдельно (они меняются реже)
+  _saveCachedTasks();
+}
 
-  _checkUpdates(manualCheck: false); // Проверка обновлений (версии)
-  _startPeriodicTimer();             // Запуск таймера для обновления данных
-  
-  setState(() => _isInitialLoading = false); // Выключили
+Future<void> _saveCachedTasks() async {
+  if (_megaTasks.isEmpty) return;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    // Сохраняем только V2 tasks (Map) — V3 (TaskV3) не сериализуются легко
+    final serializable = _megaTasks.where((t) => t is! TaskV3).toList();
+    await prefs.setString('cached_tasks', jsonEncode(serializable));
+  } catch (_) {}
+}
+
+Future<void> _loadCachedTasks() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final cached = prefs.getString('cached_tasks');
+    if (cached == null) return;
+    final List data = jsonDecode(cached);
+    if (mounted && data.isNotEmpty) {
+      setState(() => _megaTasks = data);
+    }
+  } catch (_) {}
 }
 
 
@@ -488,8 +775,8 @@ Widget _buildClickableResponse(String response) {
   _currentToastEntry = overlayEntry; // Запоминаем текущий
   overlayState.insert(overlayEntry);
 
-  // Удаляем через 5 секунд
-  Future.delayed(const Duration(seconds: 5), () {
+  // Удаляем через 3 секунд
+  Future.delayed(const Duration(seconds: 3), () {
     if (overlayEntry.mounted && _currentToastEntry == overlayEntry) {
       overlayEntry.remove();
       _currentToastEntry = null;
@@ -595,7 +882,7 @@ Widget _buildClickableResponse(String response) {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': 'application/json',
       };
-      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
+      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 3));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body)['data'];
@@ -777,7 +1064,7 @@ Future<void> _showSwapDialog() async {
   bool poolDataLoaded = false;
 
   try {
-    final response = await http.get(Uri.parse(poolUrl)).timeout(const Duration(seconds: 5));
+    final response = await http.get(Uri.parse(poolUrl)).timeout(const Duration(seconds: 3));
     if (response.statusCode == 200) {
       final data = json.decode(response.body)['data'];
       reserveAptRaw = BigInt.parse(data['balance_x']['value'] ?? '0');
@@ -1462,23 +1749,7 @@ Future<void> _swapAptToMee(double amount) async {
     return;
   }
 
-  // --- ПРОВЕРКА баланса на газ ---
-  /*
-  if (aptOnChain < 0.20) {
-    showTopToast("❌ Недостаточно APT. Petra требует минимум 0.20 APT на балансе.");
-    return;
-  }*/
 
-  if (_myKeyPair == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
-    return;
-  }
-
-  /*
-  if (amount <= 0.0009) {
-    showTopToast("❌ Минимальная сумма: 0.001 APT");
-    return;
-  }*/
 
   final double safeAmount = amount; 
   final prefs = await SharedPreferences.getInstance();
@@ -1488,7 +1759,7 @@ Future<void> _swapAptToMee(double amount) async {
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -1502,7 +1773,7 @@ Future<void> _swapAptToMee(double amount) async {
     BigInt reserveAptRaw = BigInt.zero;
     BigInt reserveMeeRaw = BigInt.zero;
 
-    final poolResponse = await http.get(Uri.parse(poolUrl)).timeout(const Duration(seconds: 5));
+    final poolResponse = await http.get(Uri.parse(poolUrl)).timeout(const Duration(seconds: 3));
     if (poolResponse.statusCode == 200) {
       final data = json.decode(poolResponse.body)['data'];
       reserveAptRaw = BigInt.parse(data['balance_x']['value'] ?? '0');
@@ -1543,9 +1814,9 @@ Future<void> _swapAptToMee(double amount) async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 4. Подготовка нашего публичного ключа DApp
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
+
+
     
     if (myPubKeyHex.startsWith('0x')) {
       myPubKeyHex = myPubKeyHex.substring(2);
@@ -1553,7 +1824,7 @@ Future<void> _swapAptToMee(double amount) async {
 
     // 5. Итоговый запрос
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -1567,24 +1838,14 @@ Future<void> _swapAptToMee(double amount) async {
     //debugPrint("📡 Min Out Raw: $amountOutMinRaw");
 
     showTopToast("🔄 Обмен APT на MEE...\nПереходим в Petra");
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
 
+    _sentToPetraForTx = true;
     await launchUrl(url, mode: LaunchMode.externalApplication);
 
     final double minOutDisplay = amountOutMinRaw.toDouble() / pow(10, 6);
 
-    /*
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "Своп запущен: $safeAmount APT → MEE (мин: ${minOutDisplay.toStringAsFixed(4)})"
-          ),
-          backgroundColor: Colors.green.shade800,
-          duration: const Duration(seconds: 6),
-        ),
-      );
-    } */
+
 
   } catch (e, stack) {
     //debugPrint("❌ Swap Error: $e");
@@ -1606,23 +1867,7 @@ Future<void> _swapMeeToApt(double amount) async {
     return;
   }
 
-  // Проверка баланса MEE (с учетом небольшого запаса)
-  /*
-  if (meeOnChain < amount + 0.1) {
-    showTopToast("Недостаточно MEE. Требуется минимум ${amount.toStringAsFixed(2)} + запас", isError: true);
-    return;
-  }*/
 
-  if (_myKeyPair == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
-    return;
-  }
-
-  /*
-  if (amount <= 0.9) {
-    showTopToast("❌ Минимальная сумма: 1 MEE");
-    return;
-  }*/
 
   final double safeAmount = amount;
   final prefs = await SharedPreferences.getInstance();
@@ -1632,7 +1877,7 @@ Future<void> _swapMeeToApt(double amount) async {
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -1645,7 +1890,7 @@ Future<void> _swapMeeToApt(double amount) async {
     // Загружаем резервы пула для расчёта (X - APT, Y - MEE)
     BigInt reserveAptRaw = BigInt.zero;
     BigInt reserveMeeRaw = BigInt.zero;
-    final poolResponse = await http.get(Uri.parse(poolUrl)).timeout(const Duration(seconds: 5));
+    final poolResponse = await http.get(Uri.parse(poolUrl)).timeout(const Duration(seconds: 3));
     if (poolResponse.statusCode == 200) {
       final data = json.decode(poolResponse.body)['data'];
       reserveAptRaw = BigInt.parse(data['balance_x']['value'] ?? '0');
@@ -1687,9 +1932,9 @@ Future<void> _swapMeeToApt(double amount) async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 4. Подготовка нашего публичного ключа DApp
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
+
+
     
     if (myPubKeyHex.startsWith('0x')) {
       myPubKeyHex = myPubKeyHex.substring(2);
@@ -1697,7 +1942,7 @@ Future<void> _swapMeeToApt(double amount) async {
 
     // 5. Формирование финального запроса в кошелек
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -1711,8 +1956,9 @@ Future<void> _swapMeeToApt(double amount) async {
     //debugPrint("📡 Min Out (APT) Raw: $amountOutMinRaw");
 
     showTopToast("🔄 Обмен MEE на APT...\nПереходим в Petra");
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
 
+    _sentToPetraForTx = true;
     await launchUrl(url, mode: LaunchMode.externalApplication);
 
     // Конвертируем для отображения (APT = 8 decimals)
@@ -1740,28 +1986,14 @@ Future<void> _swapAptToMega(double megaAmount) async {
   final double megaPriceInApt = _getMegaPriceInApt();
   final double approxAptCost = megaAmount * megaPriceInApt;
 
-  // Проверка баланса APT (с запасом на газ ~0.01 APT)
-  /*if (aptOnChain < approxAptCost + 0.01) {
-    showTopToast("Недостаточно APT\nТребуется: ${approxAptCost.toStringAsFixed(6)} + на газ", isError: true);
-    return;
-  }*/
 
-  if (_myKeyPair == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true); 
-    return;
-  }
-
-  /*if (megaAmount < 0.001) {
-    showTopToast("❌ Минимальная сумма: 0.001 MEGA"); 
-    return;
-  }*/
 
   final prefs = await SharedPreferences.getInstance();
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -1798,9 +2030,7 @@ Future<void> _swapAptToMega(double megaAmount) async {
     // Шифруем Base64-строку
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 5. Подготовка нашего публичного ключа DApp
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Также убираем 0x у нашего ключа для Petra
     if (myPubKeyHex.startsWith('0x')) {
@@ -1823,8 +2053,9 @@ Future<void> _swapAptToMega(double megaAmount) async {
     //debugPrint("📡 Сумма минта: $amountToMintRaw units");
 
     showTopToast("🔄 Обмен APT на MEGA...\nПереходим в Petra");
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
 
+    _sentToPetraForTx = true;
     await launchUrl(url, mode: LaunchMode.externalApplication);
 
     // Показываем подтверждение пользователю
@@ -1848,7 +2079,7 @@ Future<void> _claimTaskReward(String taskId, String secretWord) async {
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
-  if (petraKeyHex == null || savedPrivKey == null || _myKeyPair == null) {
+  if (petraKeyHex == null || savedPrivKey == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
@@ -1894,9 +2125,12 @@ Future<void> _claimTaskReward(String taskId, String secretWord) async {
     
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
+    /*
     // 5. Подготовка нашего ключа DApp
     final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));*/
+
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     if (myPubKeyHex.startsWith('0x')) {
       myPubKeyHex = myPubKeyHex.substring(2);
@@ -1918,12 +2152,13 @@ Future<void> _claimTaskReward(String taskId, String secretWord) async {
     showTopToast("🔑 Секрет обработан!\nПереходим в Petra для получения награды...");
 
     // Небольшая задержка, чтобы пользователь успел прочитать тост
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
 
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
-      showTopToast("❌ Ошибка: Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -1947,9 +2182,9 @@ Future<void> _sendAptosTransaction(Map<String, dynamic> payload) async {
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
-  if (petraKeyHex == null || savedPrivKey == null || _myKeyPair == null) {
+  if (petraKeyHex == null || savedPrivKey == null) {
     throw Exception(
-        "Ошибка ключей. Переподключите кошелек. \nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.");
+        "Ошибка ключей Petra. Убедитесь что на балансе ≥ 0.21 APT — при меньшем балансе Petra не подписывает транзакции. Затем в Petra → Connected apps → удалите mega.io и подключитесь заново.");
   }
 
   try {
@@ -1968,10 +2203,8 @@ Future<void> _sendAptosTransaction(Map<String, dynamic> payload) async {
     final box = pine.Box(myPrivateKey: myPrivKey, theirPublicKey: petraPubKey);
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
-
-    // 4. Подготовка нашего публичного ключа DApp
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+    
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
 
     // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Очищаем наш ключ от 0x для Petra
     if (myPubKeyHex.startsWith('0x')) {
@@ -1994,13 +2227,13 @@ Future<void> _sendAptosTransaction(Map<String, dynamic> payload) async {
     showTopToast("⚙️ Операция подготовлена!\nОткрываем кошелек для подтверждения...");
 
     // Пауза 2-3 секунды (2 обычно достаточно, чтобы прочитать)
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
 
     if (await canLaunchUrl(url)) {
-      //debugPrint("🚀 Запуск универсальной транзакции...");
+      _sentToPetraForTx = true; // флаг — при возврате покажем диалог обновления
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
     
   } catch (e, stack) {
@@ -2010,7 +2243,6 @@ Future<void> _sendAptosTransaction(Map<String, dynamic> payload) async {
     rethrow; // Пробрасываем ошибку дальше, так как метод используется внутри других try-catch
   }
 }
-
 
 
 ////////// #заработать
@@ -2097,152 +2329,7 @@ void _showSuccessSnackBar(String message) {
   );
 }
 
-/*
-void _showV3SubmitDialog(String taskId) {
-  final TextEditingController controller = TextEditingController();
 
-  showDialog(
-    context: context,
-    builder: (ctx) => Dialog(
-      backgroundColor: Colors.transparent, // Прозрачный фон для кастомной рамки
-      insetPadding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Container(
-        // Настройка рамки и фона
-        decoration: BoxDecoration(
-          color: const Color(0xFF1A1A1A),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: Colors.purpleAccent.withOpacity(0.3), 
-            width: 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.purpleAccent.withOpacity(0.1),
-              blurRadius: 20,
-              spreadRadius: 5,
-            ),
-          ],
-        ),
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Отправить ответ",
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
-              ),
-            ),
-            const SizedBox(height: 20),
-            
-            // Поле ввода
-            TextField(
-              controller: controller,
-              maxLines: 5,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-              decoration: InputDecoration(
-                hintText: "Вставьте ссылку, текст или детали работы...",
-                hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
-                filled: true,
-                fillColor: const Color(0xFF252525),
-                contentPadding: const EdgeInsets.all(16),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Color(0xFF333333)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Colors.purpleAccent, width: 1.5),
-                ),
-              ),
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // Информационная плашка
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blueAccent.withOpacity(0.05),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.info_outline, size: 18, color: Colors.blueAccent.withOpacity(0.7)),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      "После отправки рекламодатель проверит вашу работу перед начислением награды.",
-                      style: TextStyle(color: Colors.white60, fontSize: 11, height: 1.4),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            
-            const SizedBox(height: 24),
-            
-            // Кнопки действий
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: Text(
-                    "ОТМЕНА",
-                    style: TextStyle(color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.w600),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.purpleAccent,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    elevation: 0,
-                  ),
-                  onPressed: () async {
-                    final content = controller.text.trim();
-                    if (content.isEmpty) {
-                      showTopToast("Введите ответ", isError: true);
-                      return;
-                    }
-
-                    Navigator.pop(ctx);
-
-                    try {
-                      final payload = {
-                        "type": "entry_function_payload",
-                        "function": "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3::mega_tasks::submit_work_v3",
-                        "arguments": [taskId, content],
-                      };
-
-                      await _sendAptosTransaction(payload);
-                      showTopToast("✅ Ответ отправлен", isError: false);
-
-                      await Future.delayed(const Duration(seconds: 2));
-                      await _fetchMegaTasks();
-                      _setDialogState?.call(() {});
-                    } catch (e) {
-                      showTopToast("Ошибка: $e", isError: true);
-                    }
-                  },
-                  child: const Text("ОТПРАВИТЬ", style: TextStyle(fontWeight: FontWeight.bold)),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    ),
-  ).then((_) => controller.dispose());
-}
-*/
 void _showV3SubmitDialog(String taskId) {
   final TextEditingController controller = TextEditingController();
 
@@ -2367,7 +2454,7 @@ void _showV3SubmitDialog(String taskId) {
                             };
                             await _sendAptosTransaction(payload);
                             showTopToast("✅ Ответ отправлен");
-                            await Future.delayed(const Duration(seconds: 2));
+                            await Future.delayed(const Duration(seconds: 1));
                             await _fetchMegaTasks();
                             _setDialogState?.call(() {});
                           } catch (e) {
@@ -2473,126 +2560,6 @@ void _showTaskCreationChoiceDialog() {
 }
 
 
-/*
-void _showCreateManualTaskForm() {
-  final TextEditingController descController = TextEditingController();
-  final TextEditingController rewardController = TextEditingController();
-  final TextEditingController claimsController = TextEditingController();
-
-  showDialog(
-    context: context,
-    builder: (BuildContext ctx) {
-      return AlertDialog(
-        backgroundColor: const Color(0xFF1A1A1A),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(15), 
-          side: const BorderSide(color: Colors.blueAccent)
-        ),
-        title: const Text("Задание с ручной проверкой:", style: TextStyle(color: Colors.blueAccent)),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: descController,
-                maxLength: 500,
-                maxLines: null,
-                minLines: 3,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: InputDecoration(
-                  labelText: "Что нужно сделать?",
-                  hintText: "Например: Подпишись на X и пришли ссылку на профиль",
-                  labelStyle: const TextStyle(color: Colors.white70),
-                  filled: true,
-                  fillColor: Colors.black26,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: rewardController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  labelText: "Награда (\$APT) за 1 выполнение ", 
-                  labelStyle: TextStyle(color: Colors.white70)
-                ),
-              ),
-              TextField(
-                controller: claimsController,
-                keyboardType: TextInputType.number,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  labelText: "Лимит (max 1000) выполнений ", 
-                  labelStyle: TextStyle(color: Colors.white70)
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                "Комиссия за создание: 0.01 \$MEGA\nВы будете проверять отчеты вручную.",
-                style: TextStyle(color: Colors.white54, fontSize: 12),
-              ),
-              // ─── Общая сумма выплат ───────────────────────────────────────
-                ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: rewardController,
-                  builder: (context, rewardVal, _) {
-                    return ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: claimsController,
-                      builder: (context, claimsVal, _) {
-                        final double? r = double.tryParse(rewardVal.text);
-                        final int? c = int.tryParse(claimsVal.text);
-
-                        final double total = (r ?? 0) * (c ?? 0);
-
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Text(
-                            "Общая сумма: ${total.toStringAsFixed(6)} \$APT",
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-                // ──────────────────────────────────────────────────────────────
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Отмена", style: TextStyle(color: Colors.redAccent))),
-          ElevatedButton(
-            onPressed: () {
-              final String desc = descController.text.trim();
-              final double? reward = double.tryParse(rewardController.text);
-              final int? claims = int.tryParse(claimsController.text);
-
-              if (desc.isEmpty || reward == null || reward <= 0.000001 || claims == null || claims <= 0 || claims > 1000) {
-                showTopToast("Заполните поля корректно (макс. 1000 выполнений), награда не может быть меньше 0.000001 \$APT", isError: true);
-                return;
-              }
-
-              // Для APT обычно 8 децималов (Octas)
-              // Если у тебя константа decimals настроена на 8, оставляем так
-              BigInt rewardRaw = BigInt.from((reward * pow(10, 8)).round()); 
-              BigInt claimsRaw = BigInt.from(claims);
-
-              Navigator.pop(ctx);
-              _createManualTaskV3(desc, rewardRaw, claimsRaw);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700),
-            child: const Text("Создать"),
-          ),
-        ],
-      );
-    },
-  );
-}
-*/
 void _showCreateManualTaskForm() {
   final TextEditingController descController = TextEditingController();
   final TextEditingController rewardController = TextEditingController();
@@ -2819,23 +2786,7 @@ void _showConfirmManualTaskDialog(
             ],
           ),
         ),
-        /*
-        actions: [
-          TextButton(
-            onPressed: onEdit,
-            child: const Text("Редактировать", style: TextStyle(color: Colors.orangeAccent)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(confirmCtx),
-            child: const Text("Отмена", style: TextStyle(color: Colors.redAccent)),
-          ),
-          ElevatedButton(
-            onPressed: onConfirm,
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade700),
-            child: const Text("Создать"),
-          ),
-        ],
-         */ 
+
         actions: [
           TextButton(
             onPressed: onEdit, // Тут Navigator.pop уже есть внутри колбэка в первом методе
@@ -2900,7 +2851,7 @@ Future<void> _approveSelectedTasks() async {
     _selectedTaskIds.clear();
     
     // Даем немного времени блокчейну обработать транзакции перед обновлением списка
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
     await _fetchMegaTasks();
     
     showTopToast("Запросы на одобрение отправлены!");
@@ -2924,7 +2875,7 @@ Future<void> _adminBatchApproveTasks(List<int> ids) async {
   }
 
   if (!isPetraConnected) {
-    showTopToast("❌ Подключите кошелёк Petra заново", isError: true);
+    showTopToast("❌ Подключите кошелёк Petra заново. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     return;
   }
 
@@ -2976,7 +2927,7 @@ Future<void> _adminBatchApproveTasks(List<int> ids) async {
       
       // Пауза перед следующей транзакцией, если есть V3
       if (v3Ids.isNotEmpty) {
-        await Future.delayed(const Duration(seconds: 2));
+        await Future.delayed(const Duration(seconds: 1));
       }
     }
 
@@ -3016,7 +2967,7 @@ Future<void> _adminBatchApproveTasks(List<int> ids) async {
       showTopToast("✅ Запросы отправлены! (V2: ${v2Ids.length}, V3: ${v3Ids.length})");
       
       // Даем время чейну обновиться и запрашиваем свежие данные
-      await Future.delayed(const Duration(seconds: 2));
+      await Future.delayed(const Duration(seconds: 1));
       await _fetchMegaTasks();
     } else {
       showTopToast("Не удалось найти выбранные задачи в списке", isError: true);
@@ -3040,7 +2991,7 @@ Future<void> _adminBatchApproveTasks(List<int> ids) async {
     }
     _setDialogState?.call(() {});
     // Повторное обновление через долю секунды для корректной прорисовки
-    Future.delayed(const Duration(milliseconds: 400), () {
+    Future.delayed(const Duration(milliseconds: 200), () {
       _setDialogState?.call(() {});
     });
   }
@@ -3179,6 +3130,27 @@ void _showPetraRequiredDialog() {
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white70, fontSize: 12),
               ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orangeAccent.withOpacity(0.5)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.orangeAccent, size: 16),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "Для нормальной работы кошелька необходимо не менее 0.21 APT на балансе. При меньшем балансе Petra не подписывает транзакции.",
+                        style: TextStyle(color: Colors.orangeAccent, fontSize: 11, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               const SizedBox(height: 10),
               GestureDetector(
                 onTap: () => launchUrl(Uri.parse("https://play.google.com/store/apps/details?id=com.aptoslabs.petra.wallet&hl=ru"), mode: LaunchMode.externalApplication),
@@ -3280,6 +3252,155 @@ Widget _buildButtonChild(int status, DateTime? clickTime, bool isWaitFinished, i
       color: isEnabled ? Colors.white : Colors.white54,
       fontWeight: FontWeight.bold,
     ),
+  );
+}
+
+// ══════════════════════════════════════════════════════
+// Панель фильтров и сортировки для диалога "Заработать $APT"
+// ══════════════════════════════════════════════════════
+Widget _buildTaskFilterBar(StateSetter setStateDialog, bool isAdmin) {
+  // Кнопка-чип
+  Widget chip(String label, String value, {Color? color}) {
+    final bool active = _taskFilter == value;
+    return GestureDetector(
+      onTap: () => setStateDialog(() => _taskFilter = value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        margin: const EdgeInsets.only(right: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: active
+              ? (color ?? Colors.greenAccent).withOpacity(0.2)
+              : Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: active ? (color ?? Colors.greenAccent) : Colors.white24,
+            width: active ? 1.5 : 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: active ? FontWeight.bold : FontWeight.normal,
+            color: active ? (color ?? Colors.greenAccent) : Colors.white54,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Кнопка сортировки
+  Widget sortBtn(String label, String value, IconData icon) {
+    final bool active = _taskSort == value;
+    return GestureDetector(
+      onTap: () => setStateDialog(() => _taskSort = value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        margin: const EdgeInsets.only(right: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: active ? Colors.blueAccent.withOpacity(0.2) : Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: active ? Colors.blueAccent : Colors.white24,
+            width: active ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12, color: active ? Colors.blueAccent : Colors.white38),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: active ? FontWeight.bold : FontWeight.normal,
+                color: active ? Colors.blueAccent : Colors.white54,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      // ── Фильтры + сортировка скрыты по умолчанию, раскрываются по треугольнику ──
+      AnimatedSize(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeInOut,
+        child: _showSortBar
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Строка фильтров
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        chip('Все', 'all'),
+                        chip('Акт', 'active'),
+                        chip('Вып', 'done', color: Colors.white54),
+                        chip('Мои', 'mine', color: Colors.blueAccent),
+                        chip('А', 'v2', color: Colors.cyanAccent),
+                        chip('Р', 'v3', color: Colors.purpleAccent),
+                        if (isAdmin) ...[
+                          chip('На модерации', 'pending', color: Colors.orangeAccent),
+                          chip('Ждут ответа', 'waiting', color: Colors.orangeAccent),
+                        ],
+                      ],
+                    ),
+                  ),
+                  // Строка сортировки
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          const Text('Сорт:', style: TextStyle(color: Colors.white38, fontSize: 10)),
+                          const SizedBox(width: 8),
+                          sortBtn('Новые', 'new', Icons.arrow_downward),
+                          sortBtn('Старые', 'old', Icons.arrow_upward),
+                          sortBtn('Награда', 'reward', Icons.monetization_on_outlined),
+                          if (_taskFilter != 'all' || _taskSort != 'new')
+                            GestureDetector(
+                              onTap: () => setStateDialog(() {
+                                _taskFilter = 'all';
+                                _taskSort = 'new';
+                              }),
+                              child: Container(
+                                margin: const EdgeInsets.only(left: 4),
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: Colors.redAccent.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.close, size: 11, color: Colors.redAccent),
+                                    SizedBox(width: 3),
+                                    Text('Сброс', style: TextStyle(fontSize: 11, color: Colors.redAccent)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : const SizedBox.shrink(),
+      ),
+      const Divider(color: Colors.white12, height: 10),
+    ],
   );
 }
 
@@ -3390,24 +3511,7 @@ void _showEarnDialog() {
                     borderRadius: BorderRadius.circular(8),
                   ),
 
-                  /*
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      Text("ЗАДАНИЙ: $activeTasksCount", style: const TextStyle(color: Colors.white70, fontSize: 10)),
-                      const Text("|", style: TextStyle(color: Colors.white10, height: 1.0)),
-                      Text(
-                        "ПУЛ: ${totalAptPool.toStringAsFixed(4)} APT",
-                        style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold, height: 1.0),
-                      ),
-                      IconButton(
-                        padding: EdgeInsets.zero,  
-                        icon: const Icon(Icons.history, color: Colors.greenAccent, size: 18),  
-                        onPressed: _showHistorySheet,
-                        tooltip: "История",
-                      ),
-                    ],
-                  ),*/
+               
                    child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
@@ -3423,15 +3527,20 @@ void _showEarnDialog() {
                         onPressed: _showHistorySheet,
                         tooltip: "История",
                       ),
+                      // Кнопка показа сортировки
+                      IconButton(
+                        padding: EdgeInsets.zero,
+                        tooltip: "Сортировка",
+                        icon: AnimatedRotation(
+                          turns: _showSortBar ? 0.5 : 0.0,
+                          duration: const Duration(milliseconds: 200),
+                          child: const Icon(Icons.arrow_drop_down, color: Colors.greenAccent, size: 22),
+                        ),
+                        onPressed: () => setStateDialog(() => _showSortBar = !_showSortBar),
+                      ),
                     ],
                   ),
-
-
                 ),
-                  
-               
-                
-                // Вставляем сюда:
                 if (_totalPendingV3 > 0)
                   Padding(
                     padding: const EdgeInsets.only(top: 8), // Отступ сверху от контейнера статистики
@@ -3466,15 +3575,74 @@ void _showEarnDialog() {
               height: dialogHeight,
               child: Column(
                 children: [
+
+                  // ══════════════ ПАНЕЛЬ ФИЛЬТРОВ ══════════════
+                  _buildTaskFilterBar(setStateDialog, isAdmin),
+                  // Тихий индикатор обновления (только полоска сверху, без блокировки)
+                  if (_isLoadingTasks && _megaTasks.isNotEmpty)
+                    LinearProgressIndicator(
+                      backgroundColor: Colors.transparent,
+                      valueColor: AlwaysStoppedAnimation(Colors.greenAccent.withOpacity(0.5)),
+                      minHeight: 2,
+                    ),
+                  const SizedBox(height: 4),
+
                   Expanded(
-                    child: _isLoadingTasks
+                    child: (_isLoadingTasks && _megaTasks.isEmpty)
                         ? const Center(child: CircularProgressIndicator(color: Colors.greenAccent))
-                        : _megaTasks.isEmpty
-                            ? const Center(child: Text("Заданий нет", style: TextStyle(color: Colors.white54)))
-                            : ListView.builder(
-                                itemCount: _megaTasks.length,
+                        : Builder(builder: (context) {
+                            // ── применяем фильтр ──
+                            final int nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+                            List<dynamic> filtered = _megaTasks.where((task) {
+                              final bool isV3t = task is TaskV3;
+                              final String creator = isV3t ? task.creator : (task['creator']?.toString() ?? "");
+                              final int remains  = isV3t ? task.remainingClaims : (int.tryParse(task['remaining_claims']?.toString() ?? '0') ?? 0);
+                              final int status   = isV3t ? task.status : (task['status'] ?? 0);
+                              final int expires  = isV3t ? task.expiresAt : (int.tryParse(task['expires_at']?.toString() ?? '0') ?? 0);
+                              final int taskIdInt = isV3t ? task.id : (int.tryParse(task['id']?.toString() ?? '0') ?? 0);
+                              final List<dynamic> claimedBy = !isV3t && task['claimed_by'] is List ? task['claimed_by'] : [];
+                              final bool isAlreadyClaimed = claimedBy.any((a) => a.toString().toLowerCase() == currentWalletAddress.toLowerCase());
+                              final bool isFinished  = isAlreadyClaimed || status == 2;
+                              final bool isMyTask    = creator.toLowerCase() == currentWalletAddress.toLowerCase();
+                              final bool isExpired   = expires > 0 && expires < nowSec;
+                              final int? myV3St      = _myV3Statuses[taskIdInt];
+                              final bool isDoneByMe  = isFinished || (isV3t && myV3St == 1);
+                              final bool needsApproval = status == 0; // на модерации
+
+                              switch (_taskFilter) {
+                                case 'active':   return !isFinished && !isExpired;
+                                case 'done':     return isDoneByMe;
+                                case 'mine':     return isMyTask;
+                                case 'pending':  return needsApproval; // для админа
+                                case 'expired':  return isExpired;
+                                case 'v2':       return !isV3t;
+                                case 'v3':       return isV3t;
+                                case 'waiting':  return _pendingSubmissions.containsKey(taskIdInt); // для админа
+                                default:         return true;
+                              }
+                            }).toList();
+
+                            // ── применяем сортировку ──
+                            filtered.sort((a, b) {
+                              int idA = (a is TaskV3) ? a.id : (int.tryParse(a['id']?.toString() ?? '0') ?? 0);
+                              int idB = (b is TaskV3) ? b.id : (int.tryParse(b['id']?.toString() ?? '0') ?? 0);
+                              double rwA = (a is TaskV3) ? a.rewardApt : ((int.tryParse(a['reward_per_claim_apt']?.toString() ?? a['reward_per_claim']?.toString() ?? '0') ?? 0) / 1e8);
+                              double rwB = (b is TaskV3) ? b.rewardApt : ((int.tryParse(b['reward_per_claim_apt']?.toString() ?? b['reward_per_claim']?.toString() ?? '0') ?? 0) / 1e8);
+                              switch (_taskSort) {
+                                case 'old':    return idA.compareTo(idB);
+                                case 'reward': return rwB.compareTo(rwA);
+                                default:       return idB.compareTo(idA); // new
+                              }
+                            });
+
+                            if (filtered.isEmpty) {
+                              return const Center(child: Text("Нет заданий по фильтру", style: TextStyle(color: Colors.white54)));
+                            }
+
+                            return ListView.builder(
+                                itemCount: filtered.length,
                                 itemBuilder: (context, index) {
-                                  final task = _megaTasks[index];
+                                  final task = filtered[index];
 
                                   // ==================== УНИВЕРСАЛЬНЫЙ ПАРСИНГ V2 / V3 ====================
                                   final bool isV3 = task is TaskV3;
@@ -3846,38 +4014,6 @@ void _showEarnDialog() {
 
 
 
-                                          /*
-                                          ElevatedButton(
-                                            onPressed: isButtonEnabled
-                                                ? () {
-                                                    _taskClickTimes[taskId] = DateTime.now();
-                                                    setStateDialog(() {});
-                                                    _showV3SubmitDialog(taskId);
-                                                  }
-                                                : null,
-                                            style: ElevatedButton.styleFrom(
-                                              backgroundColor: isButtonEnabled 
-                                                  ? Colors.purple.shade600 
-                                                  : Colors.grey.shade800,
-                                              disabledBackgroundColor: Colors.grey.shade800,
-                                              minimumSize: const Size(70, 32),
-                                              padding: const EdgeInsets.symmetric(horizontal: 12),
-                                            ),
-                                            child: Text(
-                                              (clickTime != null && !isWaitFinished) 
-                                                  ? "${secondsLeft}с" 
-                                                  : "ОТВЕТ",
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                color: isButtonEnabled ? Colors.white : Colors.white54,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                          ),
-                                        
-                                        ] else ...[
-
-                                         */ 
                                           // Кнопка "КОД" для V2 (остаётся прежней)
                                           ElevatedButton(
                                             onPressed: isButtonEnabled
@@ -3919,113 +4055,12 @@ void _showEarnDialog() {
                                     ),
                                   );
                                 },
-                              ),
+                              );
+                          }), // конец Builder (фильтрация + сортировка)
                   ),
                   const SizedBox(height: 2),
                    
-                  /* 
-                  // Кнопка "Создать задание"
-                  if (isPetraConnected)
-                    ElevatedButton(
-                      onPressed: hasActiveMegaTask ? null : _showTaskCreationChoiceDialog,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: hasActiveMegaTask ? Colors.grey : Colors.orangeAccent,
-                        foregroundColor: Colors.black,
-                        minimumSize: const Size(double.infinity, 40),
-                      ),
-                      child: Text(
-                        hasActiveMegaTask ? "ЛИМИТ ЗАДАНИЙ 1/1" : "СОЗДАТЬ ЗАДАНИЕ",
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            actions: [
-              // Админ-панель (твой блок полностью сохранён)
-              if ((_petraAddress ?? "").toLowerCase() ==
-                      "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3".toLowerCase() &&
-                  _selectedTaskIds.isNotEmpty)
-               
-                
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        TextButton(
-                          onPressed: () => _adminBatchApproveTasks(_selectedTaskIds),
-                          child: Text("ОДОБРИТЬ (${_selectedTaskIds.length})",
-                              style: const TextStyle(color: Colors.greenAccent, fontSize: 12)),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            // твоя логика отклонения
-                          },
-                          child: Text("ОТКЛОНИТЬ (${_selectedTaskIds.length})",
-                              style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-                        ),
-                      ],
-                    ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        TextButton(
-                          onPressed: _adminBatchDeleteTasks,
-                          child: Text("УДАЛИТЬ (${_selectedTaskIds.length})",
-                              style: const TextStyle(color: Colors.orangeAccent, fontSize: 12)),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            _setDialogState = null;
-                            Navigator.pop(dialogContext);
-                          },
-                          child: const Text("ЗАКРЫТЬ", style: TextStyle(color: Colors.white54, fontSize: 12)),
-                        ),
-                      ],
-                    ),
-                  ],
-                )
-              else
-                /*
-                TextButton(
-                  onPressed: () {
-                    _setDialogState = null;
-                    Navigator.pop(dialogContext);
-                  },
-                  child: const Text("ЗАКРЫТЬ", style: TextStyle(color: Colors.white54, fontSize: 12)),
-                ),*/
-                // Кнопка ЗАКРЫТЬ (твоя, немного поправил стиль для порядка)
-                TextButton(
-                  onPressed: () {
-                    _setDialogState = null;
-                    Navigator.pop(dialogContext);
-                  },
-                  child: const Text("ЗАКРЫТЬ", style: TextStyle(color: Colors.white54, fontSize: 12)),
-                ),
-
-                // Новая кнопка ОБНОВИТЬ
-                TextButton(
-                  onPressed: () async {
-                    showTopToast("🔄 Обновление списка заданий...");
-                    await _fetchMegaTasks();
-                    if (_setDialogState != null) {
-                      _setDialogState!(() {}); 
-                    }
-                  },
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.refresh_rounded, color: Colors.greenAccent, size: 14),
-                      const SizedBox(width: 4),
-                      const Text("ОБНОВИТЬ", style: TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-            ],
-            /////// 
-            */
+                 
             // Кнопка "Создать задание" - удалена из content, перемещена в actions ниже
                 ],
               ),
@@ -4135,12 +4170,6 @@ void _showEarnDialog() {
 //// конец вывода заданий
 
 Future<void> _fetchMegaTasks() async {
-  //print("🛠 Начинаю загрузку заданий V2 + V3...");
-
-  //debugPrint("✅ Загружено заданий (V2 + V3): ${_megaTasks.length}");
-  // Добавляем этот вызов:
-  _fetchV3Submissions();
-
   void update(bool loading, List<dynamic> tasks) {
     if (mounted) {
       setState(() { 
@@ -4158,7 +4187,17 @@ Future<void> _fetchMegaTasks() async {
     }
   }
 
-  update(true, []);
+  // Показываем лоадер только если нет кэшированных задач
+  final hasCached = _megaTasks.isNotEmpty;
+  if (!hasCached) {
+    update(true, []);
+  } else {
+    // Есть кэш — показываем тихий индикатор обновления без сброса списка
+    if (mounted) setState(() => _isLoadingTasks = true);
+    if (_setDialogState != null) {
+      try { _setDialogState!(() => _isLoadingTasks = true); } catch (_) { _setDialogState = null; }
+    }
+  }
 
   try {
     const String moduleAddress = "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3";
@@ -4187,7 +4226,7 @@ Future<void> _fetchMegaTasks() async {
       http.post(viewUrl, body: jsonEncode(tasksV2Payload), headers: {"Content-Type": "application/json"}),
       http.post(viewUrl, body: jsonEncode(statusV2Payload), headers: {"Content-Type": "application/json"}),
       http.post(viewUrl, body: jsonEncode(tasksV3Payload), headers: {"Content-Type": "application/json"}),
-    ]).timeout(const Duration(seconds: 12));
+    ]).timeout(const Duration(seconds: 3));
 
     if (responses[0].statusCode != 200 || responses[2].statusCode != 200) {
       //print("⚠️ Ошибка загрузки задач");
@@ -4274,13 +4313,14 @@ Future<void> _fetchMegaTasks() async {
     update(false, combinedTasks);
     //print("✅ Загружено заданий (V2 + V3): ${combinedTasks.length}");
 
+    // Вызываем ПОСЛЕ того как _megaTasks заполнен
+    await _fetchV3Submissions();
+
   } catch (e) {
     //print("🆘 Ошибка загрузки задач: $e");
     update(false, []);
   }
 }
-
-
 
 
 Future<void> _fetchV3Submissions() async {
@@ -4407,7 +4447,7 @@ Future<void> _handleMassVerify(int taskId, List<String> workers, bool approve) a
     }
 
     // Даем чейну 2 секунды на обновление данных, прежде чем рефрешить список
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
     _fetchV3Submissions(); 
 
   } catch (e, stack) {
@@ -4714,20 +4754,24 @@ void _disconnectPetra() async {
 
 Future<void> _connectPetra() async {
   try {
-    // 1. Генерируем ОДНУ пару ключей
-    final keyPair = await algorithm.newKeyPair();
-    final privBytes = await keyPair.extractPrivateKeyBytes();
+
+  
+
+    // Генерируем ключ через pinenacl — тот же, что используется в транзакциях
+    final pinePrivKey = pine.PrivateKey.generate();
+    final privBytes = Uint8List.fromList(pinePrivKey.asTypedList);
     
-    // 2. Сохраняем приватный ключ (он нужен для расшифровки ответов Petra)
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('petra_temp_priv_key', base64.encode(privBytes));
     
-    // 3. Сохраняем пару в переменную класса
-    _myKeyPair = keyPair;
+    // Восстанавливаем _myKeyPair из тех же байт (для совместимости с остальным кодом)
+    _myKeyPair = await algorithm.newKeyPairFromSeed(privBytes);
     
-    // 4. Готовим публичный ключ для Petra
-    final pubKey = await keyPair.extractPublicKey();
-    String pubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+    // Публичный ключ берём из pinenacl, чтобы он точно совпадал с тем, что отправим в Petra
+    final pubKey = pinePrivKey.publicKey;
+    String pubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.asTypedList));
+
+
 
     // Важно: Убираем 0x, если он есть, для чистоты протокола
     if (pubKeyHex.startsWith('0x')) {
@@ -4751,11 +4795,11 @@ Future<void> _connectPetra() async {
     if (await canLaunchUrl(url)) {
 
       showTopToast("🔑 Подключаем кошелек Petra...");
-      await Future.delayed(const Duration(seconds: 2));
+      await Future.delayed(const Duration(seconds: 1));
 
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -4896,10 +4940,12 @@ Uint8List _hexToBytes(String hex) {
 
 
 Future<void> _harvest() async {
+
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   // Достаем сохраненный ключ Petra
@@ -4907,7 +4953,7 @@ Future<void> _harvest() async {
   final savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: переподключите кошелёк", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -4939,10 +4985,12 @@ Future<void> _harvest() async {
     
     // Шифруем именно base64-строку
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
-
+    /*
     // 4. Получаем публичный ключ DApp
     final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));*/
+
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // !!! ИСПРАВЛЕНИЕ 2: Убеждаемся, что наш ключ для Petra БЕЗ 0x
     if (myPubKeyHex.startsWith('0x')) {
@@ -4978,10 +5026,11 @@ Future<void> _harvest() async {
 
 
 Future<void> _harvest10() async {
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   // Достаем сохраненный публичный ключ Petra и наш временный приватный ключ
@@ -4989,7 +5038,7 @@ Future<void> _harvest10() async {
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -5023,10 +5072,12 @@ Future<void> _harvest10() async {
     
     // Шифруем Base64-строку транзакции
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
-
+    /*
     // 5. Получаем наш публичный ключ DApp
     final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));*/
+
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Убеждаемся, что наш HEX тоже без 0x для отправки в Petra
     if (myPubKeyHex.startsWith('0x')) {
@@ -5064,10 +5115,11 @@ Future<void> _harvest10() async {
 
 
 Future<void> _harvest100() async {
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   // Извлекаем ключи из памяти
@@ -5075,7 +5127,7 @@ Future<void> _harvest100() async {
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -5108,9 +5160,7 @@ Future<void> _harvest100() async {
     // Шифруем именно Base64 строку
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 5. Подготовка нашего публичного ключа DApp
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Убеждаемся, что наш ключ тоже без 0x (Petra ждет чистый HEX)
     if (myPubKeyHex.startsWith('0x')) {
@@ -5147,17 +5197,19 @@ Future<void> _harvest100() async {
 
 
 Future<void> _claimRewards() async {
+
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -5185,10 +5237,13 @@ Future<void> _claimRewards() async {
     final box = pine.Box(myPrivateKey: myPrivKey, theirPublicKey: petraPubKey);
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
-
+   
+    /*
     // 4. Подготовка нашего ключа (DApp)
     final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));*/
+
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Также очищаем наш ключ от 0x
     if (myPubKeyHex.startsWith('0x')) {
@@ -5210,13 +5265,14 @@ Future<void> _claimRewards() async {
     //debugPrint("🚀 Отправляю запрос на получение наград стейкинга...");
 
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
         
       showTopToast("💰 Забираем награду в \$MEGA");
-      await Future.delayed(const Duration(seconds: 2)); 
+      await Future.delayed(const Duration(seconds: 1)); 
 
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -5228,17 +5284,19 @@ Future<void> _claimRewards() async {
 
 
 Future<void> _stakeMega() async {
+
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -5267,9 +5325,7 @@ Future<void> _stakeMega() async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 4. Подготовка нашего публичного ключа
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Очищаем и наш ключ от 0x перед отправкой
     if (myPubKeyHex.startsWith('0x')) {
@@ -5278,7 +5334,7 @@ Future<void> _stakeMega() async {
 
     // 5. Формирование финального запроса
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -5291,15 +5347,16 @@ Future<void> _stakeMega() async {
     //debugPrint("🚀 Запуск транзакции stake_all...");
 
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
       
       showTopToast("⏳ Переход в Petra для подтверждения стейкинга...");
-      await Future.delayed(const Duration(seconds: 2));
+      await Future.delayed(const Duration(seconds: 1));
       
       await launchUrl(url, mode: LaunchMode.externalApplication);
       /*showTopToast("⏳ Переход в Petra для подтверждения стейкинга...");*/
 
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -5310,17 +5367,19 @@ Future<void> _stakeMega() async {
 }
 
 Future<void> _unstakeRequest() async {
+
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -5349,9 +5408,7 @@ Future<void> _unstakeRequest() async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 4. Подготовка нашего публичного ключа
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Очищаем наш ключ от 0x
     if (myPubKeyHex.startsWith('0x')) {
@@ -5360,7 +5417,7 @@ Future<void> _unstakeRequest() async {
 
     // 5. Формирование запроса в Petra
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -5373,15 +5430,16 @@ Future<void> _unstakeRequest() async {
     //debugPrint("🚀 Отправляю запрос на unstake_request...");
 
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
 
       showTopToast("⏳ Переход в Petra для подтверждения вывода со стейкинга...");
-      await Future.delayed(const Duration(seconds: 2));
+      await Future.delayed(const Duration(seconds: 1));
 
       await launchUrl(url, mode: LaunchMode.externalApplication);
       /*showTopToast("⏳ Переход в Petra для подтверждения...");*/
 
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -5392,17 +5450,19 @@ Future<void> _unstakeRequest() async {
 }
 
 Future<void> _cancelUnstake() async {
+
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -5431,9 +5491,7 @@ Future<void> _cancelUnstake() async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 4. Подготовка нашего публичного ключа DApp
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Очищаем и наш ключ от 0x перед отправкой
     if (myPubKeyHex.startsWith('0x')) {
@@ -5455,15 +5513,16 @@ Future<void> _cancelUnstake() async {
     //debugPrint("🚀 Отправляю запрос на cancel_unstake...");
 
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
 
       showTopToast("⏳ Переход в Petra для подтверждения стейкинга...");
-      await Future.delayed(const Duration(seconds: 2));
+      await Future.delayed(const Duration(seconds: 1));
 
       await launchUrl(url, mode: LaunchMode.externalApplication);
       /*showTopToast("⏳ Переход в Petra для отмены разстейкинга...");*/
 
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -5475,17 +5534,18 @@ Future<void> _cancelUnstake() async {
 
 
 Future<void> _unstakeConfirm() async {
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -5514,9 +5574,7 @@ Future<void> _unstakeConfirm() async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 4. Подготовка нашего публичного ключа DApp
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Очищаем и наш ключ от 0x перед отправкой в Petra
     if (myPubKeyHex.startsWith('0x')) {
@@ -5525,7 +5583,7 @@ Future<void> _unstakeConfirm() async {
 
     // 5. Формирование финального запроса
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -5538,10 +5596,11 @@ Future<void> _unstakeConfirm() async {
     //debugPrint("🚀 Отправляю запрос на подтверждение вывода (unstake_confirm)...");
 
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
       await launchUrl(url, mode: LaunchMode.externalApplication);
       showTopToast("⏳ Переход в Petra для подтверждения получения средств...");
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -5554,17 +5613,19 @@ Future<void> _unstakeConfirm() async {
 
 /// mee harvest
 Future<void> _harvestMee() async {
+
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
   if (petraKeyHex == null || savedPrivKey == null) {
-    showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
+    showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
   }
 
@@ -5596,9 +5657,11 @@ Future<void> _harvestMee() async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
+    /*
     // 5. Наш публичный ключ
     final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));*/
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Очищаем наш ключ от 0x
     if (myPubKeyHex.startsWith('0x')) {
@@ -5607,7 +5670,7 @@ Future<void> _harvestMee() async {
 
     // 6. Формирование запроса
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -5620,14 +5683,15 @@ Future<void> _harvestMee() async {
     //debugPrint("🚀 Отправляю запрос harvest для MEE...");
 
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
 
       showTopToast("⏳ Переход в Petra для получения MEE...");
-      await Future.delayed(const Duration(seconds: 2)); 
+      await Future.delayed(const Duration(seconds: 1)); 
 
       await launchUrl(url, mode: LaunchMode.externalApplication);
       /* showTopToast("⏳ Переход в Petra для получения MEE...");*/
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -5639,10 +5703,11 @@ Future<void> _harvestMee() async {
 
 
 Future<void> _stakeMee() async {
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nВ Petra → Настройки → Security & Privacy → Connected apps → удалите mega.io и подключитесь заново.", isError: true);
     return;
-  }
+  }*/
 
   // Используем meeOnChain (баланс в кошельке)
   // Вычитаем небольшой запас для надежности
@@ -5693,9 +5758,7 @@ Future<void> _stakeMee() async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 5. Подготовка нашего публичного ключа
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Очищаем наш ключ от 0x
     if (myPubKeyHex.startsWith('0x')) {
@@ -5704,7 +5767,7 @@ Future<void> _stakeMee() async {
 
     // 6. Формирование финального запроса
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -5717,15 +5780,16 @@ Future<void> _stakeMee() async {
     //debugPrint("🚀 Отправляю запрос на стейкинг $amountToStake MEE ($rawAmount raw)...");
 
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
 
       showTopToast("📥 Отправляем монеты в стейкинг...");
-      await Future.delayed(const Duration(seconds: 2));
+      await Future.delayed(const Duration(seconds: 1));
 
       await launchUrl(url, mode: LaunchMode.externalApplication);
       /* showTopToast("⏳ Открываем Petra для стейкинга MEE...");*/
 
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -5738,7 +5802,8 @@ Future<void> _stakeMee() async {
 
 
 Future<void> _unstakeMee(int unstakeType) async {
-  if (_myKeyPair == null) return;
+
+  
 
   try {
     // 1. Извлекаем число из строки (обрабатываем пробелы и запятые)
@@ -5807,8 +5872,9 @@ Future<void> _unstakeMee(int unstakeType) async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+   
+
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
 
     // Очистка нашего ключа от 0x
     if (myPubKeyHex.startsWith('0x')) {
@@ -5816,7 +5882,7 @@ Future<void> _unstakeMee(int unstakeType) async {
     }
 
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -5828,10 +5894,11 @@ Future<void> _unstakeMee(int unstakeType) async {
     final url = Uri.parse("petra://api/v1/signAndSubmit?data=$dataParam");
 
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
      // debugPrint("🚀 Запуск Unstake MEE...");
 
       showTopToast("📤 Запрос на вывод из стейкинга...");
-      await Future.delayed(const Duration(seconds: 2));
+      await Future.delayed(const Duration(seconds: 1));
 
       await launchUrl(url, mode: LaunchMode.externalApplication);
 
@@ -5925,7 +5992,7 @@ Future<void> _deleteTaskV2(String taskId) async {
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
-  if (petraKeyHex == null || savedPrivKey == null || _myKeyPair == null) {
+  if (petraKeyHex == null || savedPrivKey == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
     return;
   }
@@ -5957,9 +6024,7 @@ Future<void> _deleteTaskV2(String taskId) async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 4. Подготовка нашего публичного ключа
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Также очищаем наш ключ от 0x перед отправкой
     if (myPubKeyHex.startsWith('0x')) {
@@ -5968,7 +6033,7 @@ Future<void> _deleteTaskV2(String taskId) async {
 
     // 5. Формируем финальный запрос к Deeplink API Petra
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -5982,14 +6047,15 @@ Future<void> _deleteTaskV2(String taskId) async {
     showTopToast("🗑️ Подготовка к удалению...\nСейчас откроется Petra для подтверждения.");
 
     // Небольшая задержка, чтобы пользователь успел прочитать тост
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
 
     // 6. Запускаем кошелек
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
      // debugPrint("🚀 Отправка транзакции удаления задачи #$taskId");
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
-      showTopToast("❌ Ошибка: Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -6022,7 +6088,7 @@ Future<void> _deleteTaskV3(String taskId) async {
     showTopToast("Задание V3 удалено");
 
     // Даем блокчейну время обновиться
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
     await _fetchMegaTasks();
     _setDialogState?.call(() {});
   } catch (e, stack) {
@@ -6081,7 +6147,7 @@ Future<void> _adminBatchDeleteTasks() async {
 
       // Пауза, чтобы Petra успела переключиться, если есть еще V3
       if (v3IdsStrings.isNotEmpty) {
-        await Future.delayed(const Duration(seconds: 2));
+        await Future.delayed(const Duration(seconds: 1));
       }
     }
 
@@ -6101,7 +6167,7 @@ Future<void> _adminBatchDeleteTasks() async {
     _selectedTaskIds.clear();
     
     // Ждем подтверждения в сети перед рефрешем
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
     await _fetchMegaTasks();
     
     showTopToast("✅ Запросы на удаление отправлены");
@@ -6119,8 +6185,8 @@ Future<void> _adminBatchDeleteTasks() async {
 
 
 Future<void> _createManualTaskV3(String description, BigInt rewardPerClaimApt, BigInt totalClaims) async {
-  if (!isPetraConnected || _myKeyPair == null) {
-    showTopToast("❌ Ошибка подключения кошелька", isError: true);
+  if (!isPetraConnected) {
+    showTopToast("❌ Ошибка подключения кошелька. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     return;
   }
 
@@ -6165,9 +6231,7 @@ Future<void> _createManualTaskV3(String description, BigInt rewardPerClaimApt, B
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 4. Подготовка нашего публичного ключа
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Очищаем и наш ключ от 0x
     if (myPubKeyHex.startsWith('0x')) {
@@ -6176,7 +6240,7 @@ Future<void> _createManualTaskV3(String description, BigInt rewardPerClaimApt, B
 
     // 5. Финальный запрос
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -6188,13 +6252,14 @@ Future<void> _createManualTaskV3(String description, BigInt rewardPerClaimApt, B
 
     showTopToast("✅ Задание подготовлено!\nОткрываем Petra для оплаты ${totalAptCost / BigInt.from(100000000)} APT");
     
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
 
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
      // debugPrint("🚀 Создание V3 задачи: $description");
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -6217,7 +6282,7 @@ Future<void> _createTask(String description, BigInt rewardPerClaim, BigInt total
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
   final String? savedPrivKey = prefs.getString('petra_temp_priv_key');
 
-  if (petraKeyHex == null || savedPrivKey == null || _myKeyPair == null) {
+  if (petraKeyHex == null || savedPrivKey == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.\nПожалуйста, переподключите кошелёк.", isError: true);
     return;
   }
@@ -6258,10 +6323,8 @@ Future<void> _createTask(String description, BigInt rewardPerClaim, BigInt total
     final box = pine.Box(myPrivateKey: myPrivKey, theirPublicKey: petraPubKey);
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
-
-    // 4. Подготовка нашего публичного ключа
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+ 
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Очищаем и наш ключ от 0x
     if (myPubKeyHex.startsWith('0x')) {
@@ -6270,7 +6333,7 @@ Future<void> _createTask(String description, BigInt rewardPerClaim, BigInt total
 
     // 5. Формирование финального запроса
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -6283,14 +6346,15 @@ Future<void> _createTask(String description, BigInt rewardPerClaim, BigInt total
     showTopToast("✅ Задание подготовлено!\nОткрываем Petra для подписи...");
 
     // Небольшая задержка для UX
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 1));
 
     // 6. Запуск кошелька
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
     //  debugPrint("🚀 Запуск создания задачи V2...");
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
-      showTopToast("❌ Ошибка: Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -6736,10 +6800,12 @@ void _showUnstakeChoiceDialog() {
 }
 
 Future<void> _cancelUnstakeMee() async {
+
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
@@ -6777,9 +6843,11 @@ Future<void> _cancelUnstakeMee() async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
+    /*
     // 4. Наш публичный ключ
     final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));*/
+    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Очищаем наш ключ от 0x
     if (myPubKeyHex.startsWith('0x')) {
@@ -6788,7 +6856,7 @@ Future<void> _cancelUnstakeMee() async {
 
     // 5. Формирование запроса
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -6802,15 +6870,16 @@ Future<void> _cancelUnstakeMee() async {
 
     // 6. Запуск с проверкой
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
 
       showTopToast("🔄 Отмена вывода монет...");
-      await Future.delayed(const Duration(seconds: 2)); 
+      await Future.delayed(const Duration(seconds: 1)); 
 
       await launchUrl(url, mode: LaunchMode.externalApplication);
       /*showTopToast("⏳ Переход в Petra для отмены...");*/
 
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -6822,10 +6891,12 @@ Future<void> _cancelUnstakeMee() async {
 
 
 Future<void> _withdrawMee() async {
+
+  /*
   if (_myKeyPair == null) {
     showTopToast("❌ Ошибка: ключи не инициализированы.", isError: true);
     return;
-  }
+  }*/
 
   final prefs = await SharedPreferences.getInstance();
   String? petraKeyHex = prefs.getString('petra_saved_pub_key');
@@ -6863,9 +6934,7 @@ Future<void> _withdrawMee() async {
     final nonce = pine.PineNaClUtils.randombytes(24);
     final encrypted = box.encrypt(utf8.encode(innerBase64), nonce: nonce);
 
-    // 4. Подготовка нашего публичного ключа DApp
-    final pubKey = await _myKeyPair!.extractPublicKey();
-    String myPubKeyHex = _bytesToHex(Uint8List.fromList(pubKey.bytes));
+        String myPubKeyHex = _bytesToHex(Uint8List.fromList(pine.PrivateKey(base64.decode(savedPrivKey!)).publicKey.asTypedList));
     
     // Очищаем и наш ключ от 0x перед отправкой
     if (myPubKeyHex.startsWith('0x')) {
@@ -6874,7 +6943,7 @@ Future<void> _withdrawMee() async {
 
     // 5. Формирование финального запроса к Petra
     final finalRequest = {
-      "appInfo": {"name": "Mega App", "domain": "https://mega.io"},
+      "appInfo": {"name": "Mega", "domain": "https://mega.io"},
       "dappEncryptionPublicKey": myPubKeyHex,
       "nonce": _bytesToHex(Uint8List.fromList(nonce)),
       "payload": _bytesToHex(Uint8List.fromList(encrypted.cipherText)),
@@ -6888,14 +6957,15 @@ Future<void> _withdrawMee() async {
 
     // 6. Запуск кошелька с проверкой canLaunchUrl
     if (await canLaunchUrl(url)) {
+      _sentToPetraForTx = true;
 
       showTopToast("🔄 Вывода монет из стейкинга...");
-      await Future.delayed(const Duration(seconds: 2)); 
+      await Future.delayed(const Duration(seconds: 1)); 
 
       await launchUrl(url, mode: LaunchMode.externalApplication);
       /*showTopToast("⏳ Переход в Petra для вывода токенов...");*/
     } else {
-      showTopToast("❌ Кошелек Petra не найден", isError: true);
+      showTopToast("❌ Кошелек Petra не найден. Убедитесь что на балансе ≥ 0.21 APT", isError: true);
     }
 
   } catch (e, stack) {
@@ -6913,9 +6983,13 @@ void _initDeepLinks() {
   _linkSubscription = _appLinks.uriLinkStream.listen((uri) {
     if (!mounted) return;
 
-  
-
     if (uri.scheme == 'mega') {
+      // Deep link пришёл — Petra вернула результат через ссылку
+      // Сбрасываем флаг чтобы НЕ показывать наш диалог ожидания
+       _sentToPetraForTx = false;
+
+      //_deepLinkHandled = true;
+
       // 1. Быстрая обработка коннекта
       if (uri.path.contains('connect')) {
         Future.microtask(() async => await _handlePetraConnectResponse(uri));
@@ -6975,7 +7049,7 @@ void _initDeepLinks() {
          // debugPrint("🔄 Обновляем данные приложения");
           
           // Вызываем обновление задач ВСЕГДА при успехе любой транзакции
-          await _fetchMegaTasks(); 
+          // await _fetchMegaTasks(); 
           
           // Обновляем балансы и потоки
           _runUpdateThread(); 
@@ -7018,6 +7092,7 @@ void _initDeepLinks() {
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } catch (e) {
       if (await canLaunchUrl(url)) {
+        _sentToPetraForTx = true;
         await launchUrl(url, mode: LaunchMode.platformDefault);
       }
     }
@@ -7130,7 +7205,7 @@ void _updateWalletLabelText() {
       final resApt = await http.get(
         Uri.parse("https://api.bybit.com/v5/market/tickers?category=spot&symbol=APTUSDT"),
         headers: headers,
-      ).timeout(const Duration(seconds: 5));
+      ).timeout(const Duration(seconds: 3));
       if (resApt.statusCode == 200) {
         final data = json.decode(resApt.body);
         return double.tryParse(data['result']['list'][0]['lastPrice'].toString()) ?? 0.0;
@@ -7150,7 +7225,7 @@ void _updateWalletLabelText() {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': 'application/json',
       };
-      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
+      final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 3));
       if (response.statusCode == 200) {
         final data = json.decode(response.body)['data'];
         return {
@@ -7220,7 +7295,7 @@ void _updateWalletLabelText() {
       'Accept': '*/*',
     };
     // debugPrint("Balance URL: $url");  // Для отладки: проверьте в консоли, что URL с %3A%3A
-    final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
+    final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 3));
     if (response.statusCode == 200) {
       return int.parse(response.body.trim());  // trim() убирает пробелы или \n
     } else {
@@ -7545,7 +7620,7 @@ void _showMegaEventDialog() {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
       'Accept': '*/*', 
     };
-    final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 5));
+    final response = await http.get(url, headers: headers).timeout(const Duration(seconds: 3));
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
       final decimalsValue = data["data"]["decimals"];  // Может быть int или String
@@ -7570,7 +7645,7 @@ void _showMegaEventDialog() {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': 'application/json',
       };
-      final response = await http.get(Uri.parse(aptLedgerUrl), headers: headers).timeout(const Duration(seconds: 5));
+      final response = await http.get(Uri.parse(aptLedgerUrl), headers: headers).timeout(const Duration(seconds: 3));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return int.parse(data["ledger_timestamp"]) ~/ 1000000;
@@ -7587,7 +7662,7 @@ void _showMegaEventDialog() {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': 'application/json',
       };
-      final response = await http.get(Uri.parse(apiUrl), headers: headers).timeout(const Duration(seconds: 5));
+      final response = await http.get(Uri.parse(apiUrl), headers: headers).timeout(const Duration(seconds: 3));
       if (response.statusCode == 404) {
         if (apiUrl.contains("StakeInfo")) return {"amount": "0", "reward_amount": "0", "reward_debt": "0"};
         return null;
@@ -7599,18 +7674,29 @@ void _showMegaEventDialog() {
     return null;
   }
 
-  Future<void> _runUpdateThread() async {
+
+
+
+Future<void> _runUpdateThread() async {
+  // 1. Включаем индикатор в самом начале
+  if (mounted) {
+    setState(() => _isBlockchainUpdating = true);
+  }
+
+  try {
     await _updatePrices();
     await _fetchMegaStakeData(); // Получаем данные $MEGA
     _calculateMegaRewardLocally(); // Первичный расчет награды
     _updateMegaLabels(); // Обновляем метки
-    double aptVal = 0; double meeVal = 0;
+    
+    double aptVal = 0; 
+    double meeVal = 0;
+    
     try {
       int aptRaw = await _getRawBalance(aptCoinType);
       aptVal = aptRaw / 1e8;
       int meeDec = await _getCoinDecimals(meeCoinT0T1);
       int meeRaw = await _getRawBalance(meeCoinT0T1);
-      // meeVal = (meeRaw * rawDataCorrectionFactor) / (BigInt.from(10).pow(meeDec).toDouble());
       meeVal = meeRaw / pow(10, meeDec);
       
       int megaDec = await _getCoinDecimals(megaCoinType);
@@ -7618,16 +7704,14 @@ void _showMegaEventDialog() {
       double megaVal = megaRaw / pow(10, megaDec);
       megaOnChain = megaVal;
       megaInUsd = megaStakeBalance * _getMegaCurrentPrice() * priceApt;
-      // debugPrint("Mega raw balance: $megaRaw");
-
-
-    } catch (e) {}
+    } catch (e) {
+      debugPrint("Error fetching raw balances: $e");
+    }
 
     if (currentWalletAddress.length != 66 || !currentWalletAddress.startsWith("0x")) {
        _updateUI(null, null, 0.0, aptVal, meeVal);
-       return;
+       return; // Здесь функция прервется, но блок finally все равно сработает
     }
-
 
     String stakeResType = "0x514cfb77665f99a2e4c65a5614039c66d13e00e98daf4c86305651d29fd953e5::Staking::StakeInfo<$meeCoinT0T1,$meeCoinT0T1>";
     String stakeApiUrl = "$aptLedgerUrl/accounts/$currentWalletAddress/resource/${Uri.encodeComponent(stakeResType)}";
@@ -7641,34 +7725,31 @@ void _showMegaEventDialog() {
 
     if (meeStakeData == null || meePoolData == null || currentTime == null) {
       _updateUI(null, null, 0.0, aptVal, meeVal);
-      return;
+      return; // Здесь функция прервется, но блок finally все равно сработает
     }
 
-    double? stakeBalance; double? totalRewardFloat;
+    double? stakeBalance; 
+    double? totalRewardFloat;
+    
     try {
       BigInt amount = BigInt.parse(meeStakeData["amount"]) * BigInt.from(rawDataCorrectionFactor);
       BigInt rewardAmount = BigInt.parse(meeStakeData["reward_amount"]) * BigInt.from(rawDataCorrectionFactor);
       BigInt rewardDebt = BigInt.parse(meeStakeData["reward_debt"]) * BigInt.from(rawDataCorrectionFactor);
 
-      
-       
-      // Читаем данные о разблокировке
-     
       BigInt unlockingAmountRaw = BigInt.parse(meeStakeData["unlocking_amount"] ?? "0") * BigInt.from(rawDataCorrectionFactor);
       unlockingAmount = unlockingAmountRaw.toDouble() / pow(10, decimals);
       
       String? startTimeStr = meeStakeData["unlocking_start_time"];
       unlockingStartTime = (startTimeStr != null && startTimeStr != "0") ? int.parse(startTimeStr) : null;
 
-      // Проверка: завершена ли разблокировка (обычно 15 дней = 1296000 секунд)
       if (unlockingStartTime != null && currentTime != null) {
         const int fifteenDaysInSec = 15 * 24 * 60 * 60;
         isUnlockComplete = (currentTime >= (unlockingStartTime! + fifteenDaysInSec));
       } else {
         isUnlockComplete = false;
-      }  
+      }   
 
-            // --- ЛОГИКА ДЛЯ $MEGA STAKE ---
+      // --- ЛОГИКА ДЛЯ $MEGA STAKE ---
       String megaStakeResType = "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3::mega_coin::StakePosition";
       String megaStakeApiUrl = "$aptLedgerUrl/accounts/$currentWalletAddress/resource/${Uri.encodeComponent(megaStakeResType)}";
 
@@ -7676,67 +7757,82 @@ void _showMegaEventDialog() {
 
       if (megaStakeData != null) {
         try {
-          // Получаем значение amount из JSON
           String rawAmount = megaStakeData["amount"] ?? "0";
-          // Делим на 10^8 (так как в вашем примере 3405127654 -> 34.05)
           megaStakeBalance = double.parse(rawAmount) / pow(10, 8);
         } catch (e) {
           megaStakeBalance = 0.0;
-          //debugPrint("Error parsing MEGA stake: $e");
         }
       } else {
-        megaStakeBalance = 0.0; // Если ресурса нет (кошелек не стейкал)
+        megaStakeBalance = 0.0; 
       }
-
 
       if (amount == BigInt.zero) {
         stakeBalance = 0.0; totalRewardFloat = 0.0;
       } else {
-         BigInt accRewardPerShare = BigInt.parse(meePoolData["acc_reward_per_share"]);
-         BigInt tokenPerSecond = BigInt.parse(meePoolData["token_per_second"]);
-         int lastRewardTime = int.parse(meePoolData["last_reward_time"]);
-         BigInt unlockingAmount = BigInt.parse(meePoolData["unlocking_amount"]);
-         BigInt stakedValue = BigInt.parse(meePoolData["staked_coins"]["value"]);
-         BigInt poolTotalAmount = stakedValue - unlockingAmount;
-         int passedSeconds = currentTime - lastRewardTime;
-         BigInt rewardPerShare = BigInt.zero;
-         if (poolTotalAmount > BigInt.zero && passedSeconds > 0) {
-            rewardPerShare = (tokenPerSecond * BigInt.from(passedSeconds) * BigInt.from(accPrecision)) ~/ poolTotalAmount;
-         }
-         BigInt newAcc = accRewardPerShare + rewardPerShare;
-         BigInt pending = (amount * newAcc ~/ BigInt.from(accPrecision)) - rewardDebt;
-         BigInt totalRewardRaw = rewardAmount + pending;
-         stakeBalance = amount.toDouble() / (BigInt.from(10).pow(decimals).toDouble());
-         totalRewardFloat = totalRewardRaw.toDouble() / (BigInt.from(10).pow(decimals).toDouble());
+          BigInt accRewardPerShare = BigInt.parse(meePoolData["acc_reward_per_share"]);
+          BigInt tokenPerSecond = BigInt.parse(meePoolData["token_per_second"]);
+          int lastRewardTime = int.parse(meePoolData["last_reward_time"]);
+          BigInt poolUnlockingAmount = BigInt.parse(meePoolData["unlocking_amount"]);
+          BigInt stakedValue = BigInt.parse(meePoolData["staked_coins"]["value"]);
+          BigInt poolTotalAmount = stakedValue - poolUnlockingAmount;
+          int passedSeconds = currentTime - lastRewardTime;
+          BigInt rewardPerShare = BigInt.zero;
+          if (poolTotalAmount > BigInt.zero && passedSeconds > 0) {
+             rewardPerShare = (tokenPerSecond * BigInt.from(passedSeconds) * BigInt.from(accPrecision)) ~/ poolTotalAmount;
+          }
+          BigInt newAcc = accRewardPerShare + rewardPerShare;
+          BigInt pending = (amount * newAcc ~/ BigInt.from(accPrecision)) - rewardDebt;
+          BigInt totalRewardRaw = rewardAmount + pending;
+          stakeBalance = amount.toDouble() / (BigInt.from(10).pow(decimals).toDouble());
+          totalRewardFloat = totalRewardRaw.toDouble() / (BigInt.from(10).pow(decimals).toDouble());
       }
-    } catch (e) { stakeBalance = null; }
+    } catch (e) { 
+      stakeBalance = null; 
+    }
 
     double meeRate = 0.0;
     try {
-       BigInt amount = BigInt.parse(meeStakeData["amount"]) * BigInt.from(rawDataCorrectionFactor);
-       if (amount != BigInt.zero) {
-          BigInt tokenPerSecond = BigInt.parse(meePoolData["token_per_second"]);
-          BigInt unlockingAmount = BigInt.parse(meePoolData["unlocking_amount"]);
-          BigInt stakedValue = BigInt.parse(meePoolData["staked_coins"]["value"]);
-          BigInt poolTotalAmount = stakedValue - unlockingAmount;
-          if (poolTotalAmount > BigInt.zero) {
-             BigInt ratePrecision = BigInt.from(10).pow(18);
-             BigInt numerator = tokenPerSecond * amount * ratePrecision;
-             BigInt rateRawBigInt = numerator ~/ poolTotalAmount;
-             double rateFloatRaw = rateRawBigInt.toDouble() / ratePrecision.toDouble();
-             meeRate = rateFloatRaw / (BigInt.from(10).pow(decimals).toDouble());
-          }
-       }
-    } catch (e) { meeRate = 0.0; }
+        BigInt amount = BigInt.parse(meeStakeData["amount"]) * BigInt.from(rawDataCorrectionFactor);
+        if (amount != BigInt.zero) {
+           BigInt tokenPerSecond = BigInt.parse(meePoolData["token_per_second"]);
+           BigInt poolUnlockingAmount = BigInt.parse(meePoolData["unlocking_amount"]);
+           BigInt stakedValue = BigInt.parse(meePoolData["staked_coins"]["value"]);
+           BigInt poolTotalAmount = stakedValue - poolUnlockingAmount;
+           if (poolTotalAmount > BigInt.zero) {
+              BigInt ratePrecision = BigInt.from(10).pow(18);
+              BigInt numerator = tokenPerSecond * amount * ratePrecision;
+              BigInt rateRawBigInt = numerator ~/ poolTotalAmount;
+              double rateFloatRaw = rateRawBigInt.toDouble() / ratePrecision.toDouble();
+              meeRate = rateFloatRaw / (BigInt.from(10).pow(decimals).toDouble());
+           }
+        }
+    } catch (e) { 
+      meeRate = 0.0; 
+    }
+    
     _updateUI(stakeBalance, totalRewardFloat, meeRate, aptVal, meeVal);
 
-  
-
     if (currentWalletAddress == "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3") {
-     // await _fetchPendingTasks(); // Для админа — pending
+      // await _fetchPendingTasks(); 
     }
 
+  } catch (e) {
+    debugPrint("General update error: $e");
+  } finally {
+    // 2. Выключаем индикатор в любом случае (успех или провал)
+    if (mounted) {
+      // Небольшая задержка, чтобы полоска не мигала слишком быстро
+      await Future.delayed(const Duration(milliseconds: 200));
+      setState(() => _isBlockchainUpdating = false);
+    }
   }
+}
+
+
+
+
+
+
 
 
 void _updateUI(double? balance, double? reward, double rate, double aptVal, double meeVal) {
@@ -7747,6 +7843,16 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
     aptOnChain = aptVal;
     meeOnChain = meeVal;
 
+    //if (aptVal > 0) aptOnChain = aptVal;
+    //if (meeVal > 0) meeOnChain = meeVal;
+
+
+
+    // Сохраняем MEE стейк для рейтинга чата
+    if (balance != null) meeStaked = balance;
+    // Сохраняем кэш после обновления реальных данных
+    Future.delayed(const Duration(milliseconds: 200), _saveCachedBalances);
+
     // Расчеты для MEGA (оставляем, чтобы данные были актуальны)
     double megaPriceInApt = _getMegaCurrentPrice(); 
     double megaPriceInUsd = megaPriceInApt * priceApt;
@@ -7756,13 +7862,12 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
     // так как мы используем Text.rich напрямую в build
 
     if (balance == null || reward == null) {
-      meeBalanceText = "Ошибка сети!";
-      meeRewardText = "Ошибка!";
-      meeRateText = "Скорость: Ошибка";
-      rewardTickerText = "[ОШИБКА]";
-      isRunning = false;
+      // Не затираем кэшированные данные — просто показываем индикатор обновления
+      _isRefreshingMee = true;
+      // isRunning остаётся как было — таймер наград продолжает работать с кэшем
       return;
     }
+    _isRefreshingMee = false;
     
     meeRatePerSec = rate;
     meeCurrentReward = reward;
@@ -7796,7 +7901,7 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
 
   try {
     // Увеличим таймаут до 10 секунд на случай плохого интернета
-    final response = await http.get(Uri.parse(urlGithubApi)).timeout(const Duration(seconds: 10));
+    final response = await http.get(Uri.parse(urlGithubApi)).timeout(const Duration(seconds: 3));
 
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
@@ -7842,23 +7947,19 @@ void _updateUI(double? balance, double? reward, double rate, double aptVal, doub
         }
       });
     } else {
-      // Если сервер ответил не 200 (например, 403 - лимит запросов GitHub)
-      _setUpdateError("Ошибка сервера: ${response.statusCode}");
+      _setUpdateError("v$currentVersion (Нажмите для проверки)");
     }
   } on TimeoutException {
-    _setUpdateError("Ошибка: Время ожидания истекло");
+    _setUpdateError("v$currentVersion (Нажмите для проверки)");
   } catch (e) {
-    // Вывод типа ошибки (например, SocketException если нет интернета)
-    _setUpdateError("Ошибка: ${e.runtimeType}");
-    //debugPrint("Update error: $e");
+    _setUpdateError("v$currentVersion (Нажмите для проверки)");
   }
 }
 
-// Вспомогательный метод для вывода ошибок
 void _setUpdateError(String text) {
   setState(() {
     updateStatusText = text;
-    updateStatusColor = Colors.orangeAccent;
+    updateStatusColor = Colors.grey;
     updateAction = () => _manualUpdateCheck();
   });
 }
@@ -7921,6 +8022,49 @@ void _setUpdateError(String text) {
           Text(label, style: const TextStyle(fontSize: 13)),
           Text(val, style: const TextStyle(color: Colors.orangeAccent, fontSize: 13, fontWeight: FontWeight.w500)),
         ],
+      ),
+    );
+  }
+
+  void _openChat() {
+    if (!isPetraConnected || _petraAddress == null) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+            side: const BorderSide(color: Colors.cyanAccent),
+          ),
+          title: const Center(
+            child: Text("💬 ЧАТ", style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+          ),
+          content: const Text(
+            "Для доступа к чату необходимо подключить кошелёк Petra.",
+            style: TextStyle(color: Colors.white70),
+            textAlign: TextAlign.center,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Закрыть", style: TextStyle(color: Colors.cyanAccent)),
+            )
+          ],
+        ),
+      );
+      return;
+    }
+    final double totalScore = meeOnChain + meeStaked + megaOnChain + megaStakeBalance;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NostrChatScreen(
+          walletAddress: _petraAddress!,
+          myScore: totalScore,
+          meeWallet: meeOnChain,
+          meeStakedAmt: meeStaked,
+          megaWallet: megaOnChain,
+          megaStakedAmt: megaStakeBalance,
+        ),
       ),
     );
   }
@@ -8035,7 +8179,7 @@ void _setUpdateError(String text) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         content: Text("Ручной адрес сохранен"),
-                        duration: Duration(seconds: 3),
+                        duration: Duration(seconds: 1),
                       ),
                     );
 
@@ -8417,7 +8561,7 @@ Widget _helpStep({
             
             onRefresh: () async { 
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Обновление данных..."), duration: Duration(milliseconds: 800))
+                const SnackBar(content: Text("Обновление данных..."), duration: Duration(milliseconds: 400))
               );
               await _runUpdateThread(); 
             },
@@ -8600,92 +8744,127 @@ Widget _helpStep({
                           ),
                         ), 
 
-                        const SizedBox(height: 8),
+                        
                     
+                         //////// зеленая полоска
+                        const SizedBox(height: 2), // Отступ от текста до полоски
+
+                              // Сама зеленая полоса
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(1),
+                                child: SizedBox(
+                                  height: 1, // Делаем её очень тонкой
+                                  child: _isBlockchainUpdating 
+                                    ? const LinearProgressIndicator(
+                                        backgroundColor: Colors.transparent,
+                                        valueColor: AlwaysStoppedAnimation<Color>(Colors.greenAccent),
+                                      )
+                                    : Container(color: Colors.white10), // Серая линия, когда нет загрузки
+                                ),
+                              ),
+
+                        const SizedBox(height: 2), // Отступ
+                        //////////
+
                         // Кнопки управления кошельком и обмена
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            // ← НОВАЯ КНОПКА "ИСТОРИЯ"
-                            ElevatedButton.icon(
-                              icon: const Icon(Icons.history_rounded, size: 18, color: Colors.orangeAccent),
-                              label: const Text(
-                                "",
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blueGrey.shade900,
-                                foregroundColor: Colors.orangeAccent,
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                minimumSize: const Size(50, 36),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                elevation: 2,
-                              ),
-                              onPressed: _showHistorySheet, // _showWalletTransactionHistory,
-                            ),
-
-                            const SizedBox(width: 8),
-
-                            // Кнопка "Отправить" (остаётся как была)
-                            ElevatedButton.icon(
-                              label: const Text(
-                                "",
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                              ),
-                              icon: const Icon(Icons.send_rounded, size: 18, color: Colors.white),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blueGrey.shade900,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                minimumSize: const Size(50, 36),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                elevation: 2,
-                              ),
-                              onPressed: _showSendDialog,
-                            ),
-
-                            const SizedBox(width: 8),
-
+                            // === КНОПКИ В ДВА РЯДА ===
                             Expanded(
-                              flex: 1,
-                              child: ElevatedButton(   // твоя кнопка "БИРЖА"
-                                onPressed: () {
-                                  _fetchMegaTasks();
-                                  _showEarnDialog();
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green.shade800,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 6),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: const [
-                                    Icon(Icons.currency_exchange, size: 16, color: Colors.white),
-                                    SizedBox(width: 6),
-                                    Text("БИРЖА", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                              ),
-                            ),
-
-                            const SizedBox(width: 8),
-
-                            // Кнопка "Обмен" (остаётся как была)
-                            SizedBox(
-                              height: 36,
-                              child: ElevatedButton.icon(
-                                onPressed: _showSwapDialog,
-                                icon: const Icon(Icons.swap_horiz, size: 16),
-                                label: const Text("Обмен", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.blueGrey.shade900,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                ),
+                              child: Column(
+                                children: [
+                                  // Ряд 1: История | Отправить | Обмен
+                                  Row(
+                                    children: [
+                                      ElevatedButton(
+                                        onPressed: _showHistorySheet,
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.blueGrey.shade900,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                          minimumSize: const Size(44, 36),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                        ),
+                                        child: const Icon(Icons.history, size: 18, color: Colors.white),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      ElevatedButton(
+                                        onPressed: _showSendDialog,
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.blueGrey.shade900,
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                          minimumSize: const Size(44, 36),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                        ),
+                                        child: const Icon(Icons.send_rounded, size: 18, color: Colors.white),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: ElevatedButton.icon(
+                                          onPressed: _showSwapDialog,
+                                          icon: const Icon(Icons.swap_horiz, size: 16),
+                                          label: const Text("Обмен", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: Colors.blueGrey.shade900,
+                                            foregroundColor: Colors.white,
+                                            padding: const EdgeInsets.symmetric(vertical: 8),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  // Ряд 2: БИРЖА | ЧАТ
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: ElevatedButton(
+                                          onPressed: () { _fetchMegaTasks(); _showEarnDialog(); },
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: Colors.green.shade800,
+                                            foregroundColor: Colors.white,
+                                            padding: const EdgeInsets.symmetric(vertical: 8),
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                          ),
+                                          child: const Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Icon(Icons.currency_exchange, size: 15, color: Colors.white),
+                                              SizedBox(width: 5),
+                                              Text("БИРЖА", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: ElevatedButton(
+                                          onPressed: _openChat,
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: const Color(0xFF0D3D3D),
+                                            foregroundColor: Colors.cyanAccent,
+                                            padding: const EdgeInsets.symmetric(vertical: 8),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(6),
+                                              side: const BorderSide(color: Colors.cyanAccent, width: 0.8),
+                                            ),
+                                          ),
+                                          child: const Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Icon(Icons.chat_bubble_outline, size: 14, color: Colors.cyanAccent),
+                                              SizedBox(width: 5),
+                                              Text("ЧАТ", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
                             ),
                           ],
@@ -8757,7 +8936,13 @@ Widget _helpStep({
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Expanded(child: Text(meeBalanceText, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500))),
+                            Expanded(child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(child: Text(meeBalanceText,
+                                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500))),
+                              ],
+                            )),
                             
                             ElevatedButton(
                               onPressed: () {
@@ -8887,9 +9072,14 @@ Widget _helpStep({
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    meeRewardText, 
-                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.greenAccent)
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        meeRewardText,
+                                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.greenAccent)
+                                      ),
+                                    ],
                                   ),
                                   const SizedBox(height: 2),
                                   // НОВЫЙ БЛОК: Сумма в долларах
@@ -8913,19 +9103,33 @@ Widget _helpStep({
                                   _showPetraRequiredDialog();
                                 }
                               },
+                              
+                              /*
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.green.shade700, 
                                 foregroundColor: Colors.white,
-                              ), 
-                              child: const Text("ЗАБРАТЬ НАГРАДУ", style: TextStyle(fontSize: 10)),
+                              ),*/ 
+                             
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green.shade700, 
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 8), // Уменьшил внутренние отступы, чтобы текст влез
+                                minimumSize: const Size(80, 30),
+                              ),  
+
+
+                              // child: const Text("ЗАБРАТЬ НАГРАДУ", style: TextStyle(fontSize: 10)),
+                              child: const Text("ЗАБРАТЬ НАГРАДУ", style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold)), 
                             )
                             
                           ]
                         ),
                         const SizedBox(height: 6),
                         Row(children: [
-                          Text(meeRateText, style: const TextStyle(fontSize: 11, color: Colors.white60)),
-                          const SizedBox(width: 10),
+                          Flexible(child: Text(meeRateText,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 11, color: Colors.white60))),
+                          const SizedBox(width: 6),
                           SizedBox(
                             width: 25, height: 25,
                             child: IconButton(
@@ -9284,6 +9488,1331 @@ Widget _helpStep({
         style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E1E1E), foregroundColor: Colors.cyanAccent, side: const BorderSide(color: Colors.cyanAccent), padding: EdgeInsets.zero),
         child: Text(text, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
     ));
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// CHAT MODULE — Supabase REST, reply, multi-delete
+// Вынесен отдельно для удобства редактирования.
+// Подключается к main.dart как часть файла (copy-paste между
+// комментариями START CHAT / END CHAT).
+// ══════════════════════════════════════════════════════════════
+
+
+// ── Форматирование рейтинга ─────────────────────────────────
+String _formatRating(double score) {
+  if (score >= 1000000) return "${(score/1000000).toStringAsFixed(score>=10000000?0:1)}M";
+  if (score >= 1000)    return "${(score/1000).toStringAsFixed(score>=10000?0:1)}k";
+  if (score >= 1)       return score.toStringAsFixed(0);
+  if (score > 0)        return score.toStringAsFixed(1);
+  return "0";
+}
+
+Color _ratingColor(double score) {
+  if (score >= 1000) return const Color(0xFFCE93D8);
+  if (score >= 100)  return const Color(0xFFFFD54F);
+  if (score >= 10)   return const Color(0xFF4FC3F7);
+  if (score >= 1)    return const Color(0xFF81C784);
+  return const Color(0xFF78909C);
+}
+
+Widget _rankDot(double score, bool isAdmin) {
+  if (isAdmin) {
+    return const Padding(padding: EdgeInsets.symmetric(horizontal: 3),
+        child: Icon(Icons.star_rounded, color: Colors.orangeAccent, size: 13));
+  }
+  if (score >= 1000) {
+    return const Padding(padding: EdgeInsets.symmetric(horizontal: 3),
+        child: Text("🐋", style: TextStyle(fontSize: 11)));
+  }
+  final double sz = score >= 100 ? 10 : score >= 1 ? 7 : 5;
+  final Color c = _ratingColor(score);
+  return Container(width: sz, height: sz, margin: const EdgeInsets.symmetric(horizontal: 3),
+      decoration: BoxDecoration(shape: BoxShape.circle, color: c,
+          boxShadow: [BoxShadow(color: c.withOpacity(0.5), blurRadius: 3)]));
+}
+
+// Медали для топ-3
+String _medalEmoji(int rank) {
+  if (rank == 0) return "🥇";
+  if (rank == 1) return "🥈";
+  if (rank == 2) return "🥉";
+  return "";
+}
+
+// ── Модель сообщения ────────────────────────────────────────
+class ChatMsg {
+  final int id;
+  final String sender;      // короткий адрес
+  final String fullSender;
+  final String text;
+  final DateTime time;
+  final bool isOwn;
+  final double rating;
+  final int? replyToId;
+  final String? replyToText;
+  final String? replyToSender; // адрес (короткий) отправителя оригинала
+
+  ChatMsg({
+    required this.id, required this.sender, required this.fullSender,
+    required this.text, required this.time, required this.isOwn,
+    this.rating = 0, this.replyToId, this.replyToText, this.replyToSender,
+  });
+}
+
+// ── Модель для presence/топа ─────────────────────────────────
+class ChatUser {
+  final String addr;
+  final String? nick;
+  final double rating;
+  final DateTime lastSeen;
+  final double meeWallet;
+  final double meeStaked;
+  final double megaWallet;
+  final double megaStaked;
+
+  ChatUser({
+    required this.addr, this.nick, required this.rating, required this.lastSeen,
+    this.meeWallet = 0, this.meeStaked = 0, this.megaWallet = 0, this.megaStaked = 0,
+  });
+
+  String get displayName => nick?.isNotEmpty == true ? nick! :
+      (addr.length >= 10 ? "${addr.substring(0,6)}...${addr.substring(addr.length-4)}" : addr);
+}
+
+// ── Экран чата ──────────────────────────────────────────────
+class NostrChatScreen extends StatefulWidget {
+  final String walletAddress;
+  final double myScore;
+  final double meeWallet;
+  final double meeStakedAmt;
+  final double megaWallet;
+  final double megaStakedAmt;
+  const NostrChatScreen({
+    super.key,
+    required this.walletAddress,
+    this.myScore = 0,
+    this.meeWallet = 0,
+    this.meeStakedAmt = 0,
+    this.megaWallet = 0,
+    this.megaStakedAmt = 0,
+  });
+  @override
+  State<NostrChatScreen> createState() => _NostrChatScreenState();
+}
+
+class _NostrChatScreenState extends State<NostrChatScreen> {
+  final TextEditingController _msgCtrl = TextEditingController();
+  final ScrollController _scrollCtrl = ScrollController();
+
+  final Map<int, ChatMsg> _msgMap = {};
+  List<ChatMsg> get _msgs =>
+      (_msgMap.values.toList()..sort((a,b) => a.time.compareTo(b.time)));
+
+  bool _connected = false, _connecting = true;
+  String _statusText = "Подключение...", _lastError = "";
+  Timer? _pollTimer, _presenceTimer;
+  bool _sending = false;
+  bool _selectMode = false;
+  final Set<int> _selectedIds = {};
+  ChatMsg? _replyTo;
+
+  final Set<String> _blockedAddrs = {};
+  final Map<String, String> _nicks = {};     // addr.lower -> nick
+  final Map<String, double> _ratings = {};   // addr.lower -> rating
+  // Топ-адреса (упорядоченные) — для медалей
+  List<String> _topAddrs = [];
+  int _onlineCount = 0;
+
+  bool _hasMore = false, _loadingMore = false;
+  bool _isAtBottom = true;
+
+  static const int _pageSize = 50, _loadMore = 30, _maxHistory = 500, _maxMsgLength = 4096;
+
+  static const String _adminWallet =
+      "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3";
+  static const String _supabaseUrl = "https://ximdfelxiedpucdjwtxe.supabase.co";
+  static const String _supabaseKey =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhpbWRmZWx4aWVkcHVjZGp3dHhlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4ODY5NDEsImV4cCI6MjA5MTQ2Mjk0MX0.w0J-RXM1gN2Xry18TltlnZI2zznGQx_j5EHqHVZhpQ0";
+
+  static Map<String,String> get _h => {
+    "apikey": _supabaseKey, "Authorization": "Bearer $_supabaseKey",
+    "Content-Type": "application/json",
+  };
+
+  bool get _isAdmin => widget.walletAddress.toLowerCase() == _adminWallet.toLowerCase();
+  bool _isAdminAddr(String a) => a.toLowerCase() == _adminWallet.toLowerCase();
+  bool _isBlocked(String a) => _blockedAddrs.contains(a.toLowerCase());
+  bool get _iAmBlocked => _isBlocked(widget.walletAddress);
+
+  String get _shortAddr => _shortOf(widget.walletAddress);
+  String _shortOf(String a) => a.length >= 10
+      ? "${a.substring(0,6)}...${a.substring(a.length-4)}" : a;
+
+  // Отображаемое имя: ник или короткий адрес
+  String _displayName(String addr) =>
+      _nicks[addr.toLowerCase()] ?? _shortOf(addr);
+  String get _myDisplayName => _displayName(widget.walletAddress);
+
+  // Медаль адреса (пустая строка если не в топ-3)
+  String _medal(String addr) {
+    final i = _topAddrs.indexOf(addr.toLowerCase());
+    return i >= 0 && i < 3 ? _medalEmoji(i) : "";
+  }
+
+  static String _san(String s) {
+    final b = StringBuffer();
+    for (final r in s.runes) {
+      if (r >= 0xD800 && r <= 0xDFFF) continue;
+      if (r > 0x10FFFF) continue;
+      b.writeCharCode(r);
+    }
+    return b.toString();
+  }
+
+  static bool _isAdminNick(String n) {
+    final l = n.toLowerCase();
+    return l.startsWith('adm') || l.startsWith('адм');
+  }
+
+  void _toast(String msg, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg, style: const TextStyle(color: Colors.white, fontSize: 13)),
+      backgroundColor: isError ? Colors.redAccent.shade700 : const Color(0xFF1E1E1E),
+      duration: const Duration(seconds: 1), behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      margin: const EdgeInsets.all(12),
+    ));
+  }
+
+  // ── Lifecycle ──────────────────────────────────────────────
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBlocked(); _loadNicks(); _initChat();
+    _scrollCtrl.addListener(_onScroll);
+    _updatePresence();
+    _presenceTimer = Timer.periodic(const Duration(seconds: 20), (_) => _updatePresence());
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel(); _presenceTimer?.cancel();
+    _msgCtrl.dispose();
+    _scrollCtrl.removeListener(_onScroll); _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollCtrl.hasClients) return;
+    final pos = _scrollCtrl.position;
+    _isAtBottom = pos.maxScrollExtent - pos.pixels < 80;
+    if (pos.pixels < 150 && _hasMore && !_loadingMore) _loadOlderMessages();
+  }
+
+  // ── Presence (онлайн + топ) ────────────────────────────────
+
+  Future<void> _updatePresence() async {
+    try {
+      // Обновляем свою запись
+      await http.post(
+        Uri.parse("$_supabaseUrl/rest/v1/chat_presence"),
+        headers: {..._h, "Prefer": "resolution=merge-duplicates,return=minimal"},
+        body: jsonEncode({
+          "addr": widget.walletAddress,
+          "nick": _myDisplayName != _shortAddr ? _myDisplayName : null,
+          "rating": widget.myScore,
+          "mee_wallet": widget.meeWallet,
+          "mee_staked": widget.meeStakedAmt,
+          "mega_wallet": widget.megaWallet,
+          "mega_staked": widget.megaStakedAmt,
+          "last_seen": DateTime.now().toUtc().toIso8601String(),
+        }),
+      ).timeout(const Duration(seconds: 5));
+    } catch (_) {}
+
+    try {
+      // Онлайн = активны последние 2 минуты
+      final twoMinsAgo = DateTime.now().toUtc()
+          .subtract(const Duration(minutes: 2)).toIso8601String();
+      final onlineResp = await http.get(
+        Uri.parse("$_supabaseUrl/rest/v1/chat_presence?last_seen=gte.$twoMinsAgo&select=addr"),
+        headers: {..._h, "Prefer": "count=exact"},
+      ).timeout(const Duration(seconds: 5));
+      final countStr = onlineResp.headers['content-range'] ?? '';
+      final cnt = int.tryParse(countStr.split('/').last) ?? 0;
+      if (mounted) setState(() => _onlineCount = cnt);
+    } catch (_) {}
+
+    // Топ пользователей (по рейтингу)
+    try {
+      final topResp = await http.get(
+        Uri.parse("$_supabaseUrl/rest/v1/chat_presence?select=addr,rating&order=rating.desc&limit=3"),
+        headers: _h,
+      ).timeout(const Duration(seconds: 5));
+      if (topResp.statusCode == 200) {
+        final List data = jsonDecode(topResp.body);
+        if (mounted) {
+          setState(() {
+            _topAddrs = data.map((r) => (r['addr'] as String).toLowerCase()).toList();
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _showTopList() async {
+    List<ChatUser> users = [];
+    try {
+      final resp = await http.get(
+        Uri.parse("$_supabaseUrl/rest/v1/chat_presence?select=addr,nick,rating,last_seen,mee_wallet,mee_staked,mega_wallet,mega_staked&order=rating.desc"),
+        headers: _h,
+      ).timeout(const Duration(seconds: 8));
+      if (resp.statusCode == 200) {
+        final List data = jsonDecode(resp.body);
+        users = data.map((r) => ChatUser(
+          addr: r['addr'] as String,
+          nick: r['nick'] as String?,
+          rating: (r['rating'] as num?)?.toDouble() ?? 0,
+          lastSeen: DateTime.tryParse(r['last_seen'] as String? ?? '') ?? DateTime(2000),
+          meeWallet:  (r['mee_wallet']  as num?)?.toDouble() ?? 0,
+          meeStaked:  (r['mee_staked']  as num?)?.toDouble() ?? 0,
+          megaWallet: (r['mega_wallet'] as num?)?.toDouble() ?? 0,
+          megaStaked: (r['mega_staked'] as num?)?.toDouble() ?? 0,
+        )).toList();
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0D0D0D),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: Colors.cyanAccent.withOpacity(0.3))),
+        titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+        contentPadding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+        title: const Text("🏆 ТОП участников",
+            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: users.isEmpty
+              ? const Center(child: Text("Нет данных", style: TextStyle(color: Colors.white54)))
+              : ListView.builder(
+                  itemCount: users.length,
+                  itemBuilder: (_, i) {
+                    final u = users[i];
+                    final medal = i < 3 ? _medalEmoji(i) : "";
+                    final rColor = _ratingColor(u.rating);
+                    final isMe = u.addr.toLowerCase() == widget.walletAddress.toLowerCase();
+                    return GestureDetector(
+                      // Админ тапает строку для детальной информации
+                      onTap: _isAdmin ? () => _showUserDetail(ctx, u, i) : null,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: isMe
+                              ? Colors.cyanAccent.withOpacity(0.08)
+                              : i < 3 ? Colors.white.withOpacity(0.04) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: isMe ? Colors.cyanAccent.withOpacity(0.3)
+                                : i < 3 ? Colors.white.withOpacity(0.08) : Colors.transparent,
+                          ),
+                        ),
+                        child: Row(children: [
+                          SizedBox(width: 28,
+                              child: Text(medal.isNotEmpty ? medal : "${i+1}",
+                                  style: TextStyle(fontSize: medal.isNotEmpty ? 16 : 12,
+                                      color: Colors.white38),
+                                  textAlign: TextAlign.center)),
+                          const SizedBox(width: 8),
+                          _rankDot(u.rating, _isAdminAddr(u.addr)),
+                          const SizedBox(width: 6),
+                          Expanded(child: Text(u.displayName,
+                              style: TextStyle(
+                                  color: isMe ? Colors.cyanAccent : Colors.white70,
+                                  fontSize: 13, fontWeight: FontWeight.w600),
+                              overflow: TextOverflow.ellipsis)),
+                          Text(_formatRating(u.rating),
+                              style: TextStyle(color: rColor, fontSize: 13,
+                                  fontWeight: FontWeight.bold)),
+                          if (_isAdmin)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6),
+                              child: Icon(Icons.info_outline,
+                                  size: 14, color: Colors.white24),
+                            ),
+                        ]),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx),
+              child: const Text("Закрыть", style: TextStyle(color: Colors.cyanAccent))),
+        ],
+      ),
+    );
+  }
+
+  // Детальная информация по пользователю (только для админа)
+  void _showUserDetail(BuildContext parentCtx, ChatUser u, int rank) {
+    final medal = rank < 3 ? _medalEmoji(rank) : "";
+    showDialog(
+      context: parentCtx,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF111111),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.orangeAccent.withOpacity(0.4)),
+        ),
+        titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+        title: Row(children: [
+          if (medal.isNotEmpty)
+            Padding(padding: const EdgeInsets.only(right: 6),
+                child: Text(medal, style: const TextStyle(fontSize: 18))),
+          _rankDot(u.rating, _isAdminAddr(u.addr)),
+          const SizedBox(width: 6),
+          Expanded(child: Text(u.displayName,
+              style: const TextStyle(color: Colors.white, fontSize: 15,
+                  fontWeight: FontWeight.bold),
+              overflow: TextOverflow.ellipsis)),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Адрес кошелька
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.04),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(children: [
+              const Icon(Icons.account_balance_wallet_outlined,
+                  size: 14, color: Colors.white38),
+              const SizedBox(width: 6),
+              Expanded(child: Text(u.addr,
+                  style: const TextStyle(color: Colors.white38, fontSize: 10),
+                  overflow: TextOverflow.ellipsis)),
+            ]),
+          ),
+          const SizedBox(height: 14),
+          // Суммарный рейтинг
+          _detailRow("📊 Суммарный рейтинг", _formatRating(u.rating),
+              _ratingColor(u.rating), large: true),
+          const Divider(color: Colors.white12, height: 20),
+          // MEE
+          const Align(alignment: Alignment.centerLeft,
+              child: Text("MEE",
+                  style: TextStyle(color: Colors.cyanAccent, fontSize: 11,
+                      fontWeight: FontWeight.bold, letterSpacing: 1))),
+          const SizedBox(height: 6),
+          _detailRow("💼 В кошельке",
+              "${u.meeWallet.toStringAsFixed(2)} MEE", Colors.white70),
+          const SizedBox(height: 4),
+          _detailRow("🔒 В стейкинге",
+              "${u.meeStaked.toStringAsFixed(2)} MEE", Colors.cyanAccent),
+          _detailRow("  Итого MEE",
+              "${(u.meeWallet + u.meeStaked).toStringAsFixed(2)}", Colors.white54,
+              small: true),
+          const Divider(color: Colors.white12, height: 20),
+          // MEGA
+          const Align(alignment: Alignment.centerLeft,
+              child: Text("MEGA",
+                  style: TextStyle(color: Colors.greenAccent, fontSize: 11,
+                      fontWeight: FontWeight.bold, letterSpacing: 1))),
+          const SizedBox(height: 6),
+          _detailRow("💼 В кошельке",
+              "${u.megaWallet.toStringAsFixed(4)} MEGA", Colors.white70),
+          const SizedBox(height: 4),
+          _detailRow("🔒 В стейкинге",
+              "${u.megaStaked.toStringAsFixed(4)} MEGA", Colors.greenAccent),
+          _detailRow("  Итого MEGA",
+              "${(u.megaWallet + u.megaStaked).toStringAsFixed(4)}", Colors.white54,
+              small: true),
+          const SizedBox(height: 8),
+          // Последний визит
+          Align(alignment: Alignment.centerRight,
+              child: Text(
+                "Последний визит: ${_formatPresenceTime(u.lastSeen)}",
+                style: const TextStyle(color: Colors.white24, fontSize: 10),
+              )),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx),
+              child: const Text("Закрыть", style: TextStyle(color: Colors.white54))),
+        ],
+      ),
+    );
+  }
+
+  Widget _detailRow(String label, String value, Color valueColor,
+      {bool large = false, bool small = false}) {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: small ? 1 : 2),
+      child: Row(children: [
+        Expanded(child: Text(label,
+            style: TextStyle(
+                color: small ? Colors.white24 : Colors.white54,
+                fontSize: small ? 10 : 12))),
+        Text(value,
+            style: TextStyle(
+                color: valueColor,
+                fontSize: large ? 16 : small ? 10 : 13,
+                fontWeight: large ? FontWeight.bold : FontWeight.w600)),
+      ]),
+    );
+  }
+
+  String _formatPresenceTime(DateTime t) {
+    final now = DateTime.now().toUtc();
+    final diff = now.difference(t.toUtc());
+    if (diff.inMinutes < 2) return "только что";
+    if (diff.inMinutes < 60) return "${diff.inMinutes} мин. назад";
+    if (diff.inHours < 24) return "${diff.inHours} ч. назад";
+    return "${diff.inDays} дн. назад";
+  }
+
+  // ── Парсинг ────────────────────────────────────────────────
+
+  ChatMsg? _parseRow(dynamic raw) {
+    try {
+      final m = raw as Map;
+      final id = m['id'] as int? ?? 0;
+      final addr = _san(m['addr'] as String? ?? '');
+      if (_isBlocked(addr)) return null;
+      final text = _san(m['text'] as String? ?? '');
+      if (text.isEmpty) return null;
+      final ratingRaw = m['rating'];
+      final rating = ratingRaw is num ? ratingRaw.toDouble() : 0.0;
+      // Кэшируем рейтинг адреса
+      _ratings[addr.toLowerCase()] = rating;
+      return ChatMsg(
+        id: id, sender: _shortOf(addr), fullSender: addr, text: text,
+        time: DateTime.fromMillisecondsSinceEpoch(m['ts'] as int? ?? 0),
+        isOwn: addr.toLowerCase() == widget.walletAddress.toLowerCase(),
+        rating: rating,
+        replyToId: m['reply_to_id'] as int?,
+        replyToText: m['reply_to_text'] != null ? _san(m['reply_to_text'] as String) : null,
+        replyToSender: m['reply_to_sender'] as String?,  // храним addr
+      );
+    } catch (_) { return null; }
+  }
+
+  bool _addMessages(List<ChatMsg> msgs) {
+    bool added = false;
+    for (final msg in msgs) {
+      if (!_msgMap.containsKey(msg.id)) { _msgMap[msg.id] = msg; added = true; }
+    }
+    return added;
+  }
+
+  // ── Загрузка ──────────────────────────────────────────────
+
+  Future<void> _initChat() async {
+    if (!mounted) return;
+    setState(() { _connecting = true; _statusText = "Загрузка..."; });
+    try {
+      final resp = await http.get(
+        Uri.parse("$_supabaseUrl/rest/v1/messages?select=*&order=id.desc&limit=$_pageSize"),
+        headers: _h,
+      ).timeout(const Duration(seconds: 8));
+      if (!mounted) return;
+      if (resp.statusCode == 200) {
+        final List data = jsonDecode(resp.body);
+        final msgs = data.map(_parseRow).whereType<ChatMsg>().toList();
+        _hasMore = data.length >= _pageSize;
+        setState(() {
+          _msgMap.clear();
+          for (final m in msgs) { _msgMap[m.id] = m; }
+          _connected = true; _connecting = false; _statusText = "В сети"; _lastError = "";
+        });
+        Future.delayed(const Duration(milliseconds: 150), _scrollToBottom);
+      } else { _setError("Ошибка ${resp.statusCode}"); }
+    } catch (e) { _setError(e.toString().split(':').first); }
+    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) => _fetchNew());
+  }
+
+  Future<void> _fetchNew() async {
+    if (_msgMap.isEmpty) return;
+    final maxId = _msgMap.keys.reduce((a,b) => a>b?a:b);
+    try {
+      final resp = await http.get(
+        Uri.parse("$_supabaseUrl/rest/v1/messages?select=*&id=gt.$maxId&order=id.asc&limit=50"),
+        headers: _h,
+      ).timeout(const Duration(seconds: 6));
+      if (!mounted || resp.statusCode != 200) return;
+      final List data = jsonDecode(resp.body);
+      if (data.isEmpty) return;
+      final msgs = data.map(_parseRow).whereType<ChatMsg>().toList();
+      final added = _addMessages(msgs);
+      if (added && mounted) {
+        setState(() {});
+        if (_isAtBottom) Future.delayed(const Duration(milliseconds: 100), _scrollToBottom);
+      }
+      if (!_connected && mounted) setState(() { _connected = true; _statusText = "В сети"; });
+    } catch (_) {}
+  }
+
+  Future<void> _loadOlderMessages() async {
+    if (_loadingMore || !_hasMore || _msgMap.isEmpty) return;
+    setState(() => _loadingMore = true);
+    final minId = _msgMap.keys.reduce((a,b) => a<b?a:b);
+    final prevExtent = _scrollCtrl.hasClients ? _scrollCtrl.position.maxScrollExtent : 0.0;
+    try {
+      final resp = await http.get(
+        Uri.parse("$_supabaseUrl/rest/v1/messages?select=*&id=lt.$minId&order=id.desc&limit=$_loadMore"),
+        headers: _h,
+      ).timeout(const Duration(seconds: 8));
+      if (!mounted) return;
+      if (resp.statusCode == 200) {
+        final List data = jsonDecode(resp.body);
+        final msgs = data.map(_parseRow).whereType<ChatMsg>().toList();
+        _hasMore = data.length >= _loadMore;
+        _addMessages(msgs);
+        setState(() {});
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scrollCtrl.hasClients) {
+            final diff = _scrollCtrl.position.maxScrollExtent - prevExtent;
+            if (diff > 0) _scrollCtrl.jumpTo(_scrollCtrl.offset + diff);
+          }
+        });
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _loadingMore = false);
+  }
+
+  void _setError(String msg) {
+    if (!mounted) return;
+    setState(() {
+      _lastError = msg;
+      if (_connecting) { _connected = false; _connecting = false; _statusText = "Ошибка"; }
+    });
+  }
+
+  Future<void> _trimHistory() async {
+    try {
+      final countResp = await http.get(
+        Uri.parse("$_supabaseUrl/rest/v1/messages?select=id&order=id.asc"),
+        headers: {..._h, "Prefer": "count=exact"},
+      ).timeout(const Duration(seconds: 6));
+      final total = int.tryParse(
+          (countResp.headers['content-range'] ?? '').split('/').last) ?? 0;
+      if (total <= _maxHistory) return;
+      final toDelete = total - _maxHistory;
+      final oldResp = await http.get(
+        Uri.parse("$_supabaseUrl/rest/v1/messages?select=id&order=id.asc&limit=$toDelete"),
+        headers: _h).timeout(const Duration(seconds: 6));
+      if (oldResp.statusCode == 200) {
+        final ids = (jsonDecode(oldResp.body) as List).map((m) => m['id']).toList();
+        if (ids.isNotEmpty) {
+          await http.delete(
+            Uri.parse("$_supabaseUrl/rest/v1/messages?id=in.(${ids.join(',')})"),
+            headers: {..._h, "Prefer": "return=minimal"}).timeout(const Duration(seconds: 8));
+        }
+      }
+    } catch (_) {}
+  }
+
+  // ── Отправка ──────────────────────────────────────────────
+
+  Future<void> _sendMessage() async {
+    if (_iAmBlocked) { _toast("🚫 Вы заблокированы за спам.", isError: true); return; }
+    final raw = _msgCtrl.text.trim();
+    if (raw.isEmpty || _sending) return;
+    if (raw.length > _maxMsgLength) {
+      _toast("Сообщение слишком длинное (макс. $_maxMsgLength)", isError: true); return;
+    }
+    final text = _san(raw);
+    if (text.isEmpty) return;
+    _msgCtrl.clear();
+    final reply = _replyTo;
+    setState(() { _sending = true; _replyTo = null; });
+
+    try {
+      final body = <String, dynamic>{
+        "addr": widget.walletAddress, "text": text,
+        "ts": DateTime.now().millisecondsSinceEpoch, "rating": widget.myScore,
+        if (reply != null) ...{
+          "reply_to_id": reply.id,
+          "reply_to_text": reply.text.length > 80 ? reply.text.substring(0,80)+"..." : reply.text,
+          // Сохраняем полный адрес оригинала — для резолва ника при отображении
+          "reply_to_sender": reply.fullSender,
+        },
+      };
+      final resp = await http.post(
+        Uri.parse("$_supabaseUrl/rest/v1/messages"),
+        headers: _h, body: jsonEncode(body)).timeout(const Duration(seconds: 8));
+
+      if (resp.statusCode == 400 || resp.statusCode == 500) {
+        final body = resp.body;
+        if (body.contains('rate_limit')) {
+          _toast("Слишком часто! Подождите 3 секунды.", isError: true);
+          _msgCtrl.text = text; // возвращаем текст
+        }
+      }
+      if (DateTime.now().second % 20 == 0) _trimHistory();
+    } catch (_) {}
+    finally { if (mounted) setState(() => _sending = false); }
+    await _fetchNew();
+  }
+
+  // ── Удаление ──────────────────────────────────────────────
+
+  Future<void> _deleteSelected() async {
+    final ids = Set<int>.from(_selectedIds);
+    setState(() {
+      _selectMode = false; _selectedIds.clear();
+      for (final id in ids) { _msgMap.remove(id); }
+    });
+    _pollTimer?.cancel();
+    try {
+      await http.delete(
+        Uri.parse("$_supabaseUrl/rest/v1/messages?id=in.(${ids.join(',')})"),
+        headers: {..._h, "Prefer": "return=minimal"}).timeout(const Duration(seconds: 8));
+    } catch (_) {}
+    await Future.delayed(const Duration(milliseconds: 300));
+    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) => _fetchNew());
+  }
+
+  // ── Блокировки ────────────────────────────────────────────
+
+  Future<void> _loadBlocked() async {
+    try {
+      final resp = await http.get(
+          Uri.parse("$_supabaseUrl/rest/v1/blocked_wallets?select=addr"), headers: _h)
+          .timeout(const Duration(seconds: 6));
+      if (resp.statusCode == 200) {
+        final List data = jsonDecode(resp.body);
+        if (mounted) {
+          setState(() {
+            _blockedAddrs.clear();
+            for (final r in data) { _blockedAddrs.add((r['addr'] as String).toLowerCase()); }
+          });
+        }
+      }
+    } catch (_) {}
+    Future.delayed(const Duration(seconds: 30), () { if (mounted) _loadBlocked(); });
+  }
+
+  Future<void> _blockUser(String addr) async {
+    final lower = addr.toLowerCase();
+    final ids = _msgMap.values.where((m) => m.fullSender.toLowerCase() == lower)
+        .map((m) => m.id).toList();
+    setState(() { _blockedAddrs.add(lower); for (final id in ids) { _msgMap.remove(id); } });
+    try {
+      await http.post(Uri.parse("$_supabaseUrl/rest/v1/blocked_wallets"),
+          headers: {..._h, "Prefer": "return=minimal"},
+          body: jsonEncode({"addr": lower})).timeout(const Duration(seconds: 6));
+    } catch (_) {}
+    if (ids.isNotEmpty) {
+      try {
+        await http.delete(
+            Uri.parse("$_supabaseUrl/rest/v1/messages?id=in.(${ids.join(',')})"),
+            headers: {..._h, "Prefer": "return=minimal"}).timeout(const Duration(seconds: 8));
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _unblockUser(String addr) async {
+    final lower = addr.toLowerCase();
+    setState(() => _blockedAddrs.remove(lower));
+    try {
+      await http.delete(
+          Uri.parse("$_supabaseUrl/rest/v1/blocked_wallets?addr=eq.${Uri.encodeComponent(lower)}"),
+          headers: {..._h, "Prefer": "return=minimal"}).timeout(const Duration(seconds: 6));
+    } catch (_) {}
+  }
+
+  void _showBlockedList() {
+    showDialog(context: context,
+      builder: (ctx) => StatefulBuilder(builder: (c2, setDlg) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14),
+            side: BorderSide(color: Colors.redAccent.withOpacity(0.4))),
+        title: const Text("🚫 Заблокированные",
+            style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+        content: _blockedAddrs.isEmpty
+            ? const Text("Список пуст", style: TextStyle(color: Colors.white54))
+            : SizedBox(width: double.maxFinite,
+                child: ListView(shrinkWrap: true, children: _blockedAddrs.map((a) =>
+                  ListTile(dense: true,
+                    title: Text(_shortOf(a), style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                    trailing: TextButton(
+                      onPressed: () async { await _unblockUser(a); setDlg(() {}); },
+                      child: const Text("Разблокировать",
+                          style: TextStyle(color: Colors.greenAccent, fontSize: 12)),
+                    ),
+                  )
+                ).toList())),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx),
+            child: const Text("Закрыть", style: TextStyle(color: Colors.white54)))],
+      )),
+    );
+  }
+
+  Future<void> _confirmBlock(ChatMsg msg) async {
+    final blocked = _isBlocked(msg.fullSender);
+    final ok = await showDialog<bool>(context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: (blocked?Colors.greenAccent:Colors.redAccent).withOpacity(0.5))),
+        title: Text(blocked ? "Разблокировать?" : "Заблокировать?",
+            style: TextStyle(color: blocked?Colors.greenAccent:Colors.redAccent,
+                fontSize: 15, fontWeight: FontWeight.bold)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(_displayName(msg.fullSender),
+              style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          if (!blocked) ...[const SizedBox(height:8),
+            const Text("Все сообщения пользователя будут удалены.",
+                style: TextStyle(color: Colors.white38, fontSize: 12), textAlign: TextAlign.center)],
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Отмена", style: TextStyle(color: Colors.white54))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true),
+              child: Text(blocked?"Разблокировать":"Заблокировать",
+                  style: TextStyle(color: blocked?Colors.greenAccent:Colors.redAccent,
+                      fontWeight: FontWeight.bold))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    if (blocked) await _unblockUser(msg.fullSender); else await _blockUser(msg.fullSender);
+  }
+
+  // ── Ники ──────────────────────────────────────────────────
+
+  Future<void> _loadNicks() async {
+    try {
+      final resp = await http.get(
+          Uri.parse("$_supabaseUrl/rest/v1/nicknames?select=addr,nick"), headers: _h)
+          .timeout(const Duration(seconds: 6));
+      if (resp.statusCode == 200) {
+        final List data = jsonDecode(resp.body);
+        if (mounted) {
+          setState(() {
+            for (final r in data) {
+              _nicks[(r['addr'] as String).toLowerCase()] = r['nick'] as String;
+            }
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _showChangeNickDialog() {
+    final ctrl = TextEditingController(text: _nicks[widget.walletAddress.toLowerCase()] ?? '');
+    showDialog(context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14),
+            side: BorderSide(color: Colors.cyanAccent.withOpacity(0.4))),
+        title: const Text("Изменить ник",
+            style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text("Ник виден всем вместо адреса кошелька.",
+              style: TextStyle(color: Colors.white54, fontSize: 12)),
+          const SizedBox(height: 4),
+          const Text("Ники на «adm/адм» и уже занятые ники недоступны.",
+              style: TextStyle(color: Colors.white38, fontSize: 11)),
+          const SizedBox(height: 12),
+          TextField(controller: ctrl, maxLength: 20,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: "Введите ник...", hintStyle: const TextStyle(color: Colors.white38),
+              filled: true, fillColor: const Color(0xFF252525),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: Colors.cyanAccent.withOpacity(0.3))),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: Colors.cyanAccent.withOpacity(0.3))),
+              counterStyle: const TextStyle(color: Colors.white38),
+            )),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx),
+              child: const Text("Отмена", style: TextStyle(color: Colors.white54))),
+          TextButton(
+            onPressed: () async {
+              final nick = ctrl.text.trim();
+              if (nick.isNotEmpty && _isAdminNick(nick) && !_isAdmin) {
+                Navigator.pop(ctx);
+                _toast("Этот ник зарезервирован для администратора", isError: true);
+                return;
+              }
+              Navigator.pop(ctx);
+              await _saveNick(nick);
+            },
+            child: const Text("Сохранить",
+                style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _saveNick(String nick) async {
+    final addr = widget.walletAddress.toLowerCase();
+    try {
+      if (nick.isEmpty) {
+        await http.delete(
+            Uri.parse("$_supabaseUrl/rest/v1/nicknames?addr=eq.${Uri.encodeComponent(addr)}"),
+            headers: {..._h, "Prefer": "return=minimal"}).timeout(const Duration(seconds: 6));
+        if (mounted) setState(() => _nicks.remove(addr));
+      } else {
+        // Проверка уникальности
+        final checkResp = await http.get(
+          Uri.parse("$_supabaseUrl/rest/v1/nicknames?nick=eq.${Uri.encodeComponent(nick)}&addr=neq.${Uri.encodeComponent(widget.walletAddress)}"),
+          headers: _h).timeout(const Duration(seconds: 5));
+        if (checkResp.statusCode == 200) {
+          final List existing = jsonDecode(checkResp.body);
+          if (existing.isNotEmpty) {
+            _toast("Ник '$nick' уже занят, выберите другой", isError: true);
+            return;
+          }
+        }
+        final resp = await http.post(Uri.parse("$_supabaseUrl/rest/v1/nicknames"),
+            headers: {..._h, "Prefer": "resolution=merge-duplicates,return=minimal"},
+            body: jsonEncode({"addr": widget.walletAddress, "nick": nick,
+              "updated_at": DateTime.now().toIso8601String()}))
+            .timeout(const Duration(seconds: 6));
+        if (resp.statusCode == 409) {
+          _toast("Ник '$nick' уже занят, выберите другой", isError: true);
+          return;
+        }
+        if (mounted) setState(() => _nicks[addr] = nick);
+        _loadNicks();
+      }
+    } catch (_) { _toast("Ошибка сохранения ника", isError: true); }
+  }
+
+  // ── Helpers ────────────────────────────────────────────────
+
+  void _scrollToBottom() {
+    if (_scrollCtrl.hasClients) {
+      _scrollCtrl.animateTo(_scrollCtrl.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+    }
+  }
+
+  String _formatTime(DateTime t) =>
+      "${t.hour.toString().padLeft(2,'0')}:${t.minute.toString().padLeft(2,'0')}";
+
+  // ── UI ────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    final msgs = _msgs;
+    final canDelete = _selectMode && _selectedIds.isNotEmpty;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D0D0D),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF111111),
+        elevation: 0,
+        leadingWidth: 40,
+        leading: _selectMode
+            ? IconButton(icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+                onPressed: () => setState(() { _selectMode = false; _selectedIds.clear(); }),
+                padding: EdgeInsets.zero)
+            : IconButton(icon: const Icon(Icons.arrow_back_ios, color: Colors.cyanAccent, size: 16),
+                onPressed: () => Navigator.pop(context),
+                padding: EdgeInsets.zero),
+        title: _selectMode
+            ? Text("Выбрано: ${_selectedIds.length}",
+                style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold))
+            : Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                const Text("ЧАТ",
+                    style: TextStyle(color: Colors.cyanAccent, fontSize: 14,
+                        fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Container(width: 5, height: 5, margin: const EdgeInsets.only(right: 4),
+                      decoration: BoxDecoration(shape: BoxShape.circle,
+                          color: _connected ? Colors.greenAccent : Colors.redAccent)),
+                  Flexible(child: Text(
+                    _iAmBlocked ? "🚫 Заблок. · $_myDisplayName"
+                        : "${_connected?'В сети':_statusText} · $_myDisplayName",
+                    style: TextStyle(
+                        color: _iAmBlocked ? Colors.redAccent
+                            : _connected ? Colors.greenAccent.withOpacity(0.8) : Colors.redAccent,
+                        fontSize: 9),
+                    overflow: TextOverflow.ellipsis, maxLines: 1,
+                  )),
+                ]),
+              ]),
+        actions: [
+          if (_selectMode && canDelete)
+            IconButton(icon: const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent, size: 20),
+              onPressed: () async {
+                final ok = await showDialog<bool>(context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: const Color(0xFF1A1A1A),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: Colors.redAccent.withOpacity(0.5))),
+                    title: Text("Удалить ${_selectedIds.length} сообщений?",
+                        style: const TextStyle(color: Colors.white, fontSize: 15)),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text("Отмена", style: TextStyle(color: Colors.white54))),
+                      TextButton(onPressed: () => Navigator.pop(ctx, true),
+                          child: const Text("Удалить", style: TextStyle(
+                              color: Colors.redAccent, fontWeight: FontWeight.bold))),
+                    ],
+                  ),
+                );
+                if (ok == true) _deleteSelected();
+              }),
+          if (!_selectMode) ...[
+            // Онлайн
+            if (_onlineCount > 0)
+              Padding(
+                padding: const EdgeInsets.only(right: 2),
+                child: Center(child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.greenAccent.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.greenAccent.withOpacity(0.3)),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Container(width: 5, height: 5,
+                        decoration: const BoxDecoration(shape: BoxShape.circle,
+                            color: Colors.greenAccent)),
+                    const SizedBox(width: 3),
+                    Text("$_onlineCount",
+                        style: const TextStyle(color: Colors.greenAccent, fontSize: 10,
+                            fontWeight: FontWeight.bold)),
+                  ]),
+                )),
+              ),
+            // ТОП
+            IconButton(icon: const Icon(Icons.leaderboard_rounded, color: Colors.amberAccent, size: 20),
+                tooltip: "ТОП участников", onPressed: _showTopList,
+                padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 36, minHeight: 36)),
+            // Ник
+            if (!_iAmBlocked)
+              IconButton(icon: const Icon(Icons.badge_outlined, color: Colors.cyanAccent, size: 20),
+                  tooltip: "Изменить ник", onPressed: _showChangeNickDialog,
+                  padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 36, minHeight: 36)),
+            // Блок (admin)
+            if (_isAdmin)
+              IconButton(icon: const Icon(Icons.block, color: Colors.redAccent, size: 20),
+                  tooltip: "Заблокированные", onPressed: _showBlockedList,
+                  padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 36, minHeight: 36)),
+          ],
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: Colors.cyanAccent.withOpacity(0.2)),
+        ),
+      ),
+      body: Column(children: [
+        if (_loadingMore)
+          Container(padding: const EdgeInsets.symmetric(vertical: 5), color: const Color(0xFF111111),
+              child: const Center(child: SizedBox(width: 14, height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(Colors.cyanAccent))))),
+
+        Expanded(child: _buildList(msgs)),
+
+        if (_replyTo != null && !_iAmBlocked)
+          Container(color: const Color(0xFF1A1A1A),
+            padding: const EdgeInsets.fromLTRB(12, 5, 8, 5),
+            child: Row(children: [
+              Container(width: 3, height: 32, color: Colors.cyanAccent,
+                  margin: const EdgeInsets.only(right: 8)),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min, children: [
+                Row(children: [
+                  // Ник в reply preview
+                  Text(_displayName(_replyTo!.fullSender),
+                      style: const TextStyle(color: Colors.cyanAccent, fontSize: 11,
+                          fontWeight: FontWeight.bold)),
+                  const SizedBox(width: 5),
+                  Text(_formatRating(_replyTo!.rating),
+                      style: TextStyle(color: _ratingColor(_replyTo!.rating), fontSize: 10)),
+                ]),
+                Text(_replyTo!.text.length > 60
+                    ? _replyTo!.text.substring(0,60)+"..." : _replyTo!.text,
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ])),
+              IconButton(icon: const Icon(Icons.close, color: Colors.white38, size: 16),
+                  onPressed: () => setState(() => _replyTo = null),
+                  padding: EdgeInsets.zero, constraints: const BoxConstraints()),
+            ]),
+          ),
+
+        Container(height: 1, color: Colors.cyanAccent.withOpacity(0.15)),
+
+        Container(
+          color: const Color(0xFF111111),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(children: [
+            Expanded(child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(
+                  color: _iAmBlocked ? Colors.redAccent.withOpacity(0.4) : Colors.cyanAccent.withOpacity(0.3),
+                  width: 0.8),
+              ),
+              child: TextField(controller: _msgCtrl, enabled: !_iAmBlocked,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                maxLines: null, maxLength: _maxMsgLength,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _sendMessage(),
+                decoration: InputDecoration(
+                  hintText: _iAmBlocked ? "🚫 Заблокировано за спам"
+                      : _sending ? "Отправка..." : "Написать...",
+                  hintStyle: TextStyle(
+                      color: _iAmBlocked ? Colors.redAccent.withOpacity(0.7) : Colors.white30,
+                      fontSize: 13),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  border: InputBorder.none, counterText: "",
+                ),
+              ),
+            )),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _iAmBlocked ? null : _sendMessage,
+              child: Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: (_iAmBlocked || _sending) ? Colors.grey.shade700 : Colors.cyanAccent,
+                  boxShadow: (!_iAmBlocked && !_sending)
+                      ? [BoxShadow(color: Colors.cyanAccent.withOpacity(0.4), blurRadius: 8)] : null,
+                ),
+                child: Icon(_iAmBlocked ? Icons.block : Icons.send_rounded,
+                    color: (_iAmBlocked || _sending) ? Colors.white30 : Colors.black, size: 20),
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildList(List<ChatMsg> msgs) {
+    if (_connecting) {
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation(Colors.cyanAccent), strokeWidth: 2),
+        const SizedBox(height: 16),
+        Text(_statusText, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+      ]));
+    }
+    if (!_connected && msgs.isEmpty) {
+      return Center(child: Padding(padding: const EdgeInsets.all(24),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.wifi_off_rounded, color: Colors.redAccent.withOpacity(0.6), size: 48),
+          const SizedBox(height: 16),
+          Text(_statusText, textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.redAccent, fontSize: 14, fontWeight: FontWeight.bold)),
+          if (_lastError.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(_lastError, textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white30, fontSize: 10), maxLines: 3),
+          ],
+          const SizedBox(height: 20),
+          TextButton.icon(onPressed: () { _pollTimer?.cancel(); _initChat(); },
+              icon: const Icon(Icons.refresh, color: Colors.cyanAccent, size: 18),
+              label: const Text("Попробовать снова", style: TextStyle(color: Colors.cyanAccent))),
+        ]),
+      ));
+    }
+    if (msgs.isEmpty) {
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.chat_bubble_outline, color: Colors.cyanAccent.withOpacity(0.3), size: 48),
+        const SizedBox(height: 12),
+        const Text("Пока сообщений нет.\nБудь первым!",
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white38, fontSize: 14, height: 1.5)),
+      ]));
+    }
+    return ListView.builder(
+      controller: _scrollCtrl,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+      itemCount: msgs.length,
+      itemBuilder: (ctx, i) => _buildMessage(msgs[i], i, msgs),
+    );
+  }
+
+  Widget _buildMessage(ChatMsg msg, int index, List<ChatMsg> msgs) {
+    final isOwn = msg.isOwn;
+    final canSelect = isOwn || _isAdmin;
+    final isSelected = _selectedIds.contains(msg.id);
+    final rColor = isOwn ? _ratingColor(widget.myScore) : _ratingColor(msg.rating);
+    final ratingVal = isOwn ? widget.myScore : msg.rating;
+    final senderIsAdmin = _isAdminAddr(msg.fullSender);
+    // Ник отправителя
+    final senderLabel = _displayName(msg.fullSender);
+    // Медаль отправителя
+    final medal = _medal(msg.fullSender);
+    final showHeader = index == 0 ||
+        msgs[index-1].fullSender != msg.fullSender ||
+        msg.time.difference(msgs[index-1].time).inMinutes > 5;
+
+    return GestureDetector(
+      onLongPress: canSelect
+          ? () => setState(() { _selectMode = true; _selectedIds.add(msg.id); }) : null,
+      onTap: _iAmBlocked ? null : _selectMode
+          ? () {
+              if (!canSelect) return;
+              setState(() {
+                if (isSelected) { _selectedIds.remove(msg.id);
+                  if (_selectedIds.isEmpty) _selectMode = false;
+                } else { _selectedIds.add(msg.id); }
+              });
+            }
+          : () => setState(() => _replyTo = msg),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        color: isSelected ? Colors.cyanAccent.withOpacity(0.08) : Colors.transparent,
+        padding: EdgeInsets.only(
+          top: showHeader ? 8 : 2, bottom: 2,
+          left: isOwn ? 44 : 0, right: isOwn ? 0 : 44,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisAlignment: isOwn ? MainAxisAlignment.end : MainAxisAlignment.start,
+          children: [
+            if (_selectMode && !isOwn && canSelect)
+              Padding(padding: const EdgeInsets.only(right: 4, bottom: 4),
+                  child: Icon(isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
+                      color: isSelected ? Colors.cyanAccent : Colors.white30, size: 18)),
+
+            Flexible(child: Column(
+              crossAxisAlignment: isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              children: [
+                if (showHeader)
+                  Padding(
+                    padding: EdgeInsets.only(left: isOwn?0:2, right: isOwn?2:0, bottom: 3),
+                    child: Row(mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center, children: [
+                      // Медаль перед ником
+                      if (medal.isNotEmpty)
+                        Padding(padding: const EdgeInsets.only(right: 3),
+                            child: Text(medal, style: const TextStyle(fontSize: 12))),
+                      Text(senderLabel,
+                          style: TextStyle(
+                              color: senderIsAdmin ? Colors.orangeAccent
+                                  : isOwn ? Colors.cyanAccent.withOpacity(0.8) : Colors.white60,
+                              fontSize: 11, fontWeight: FontWeight.w600)),
+                      _rankDot(ratingVal, senderIsAdmin),
+                      Text(_formatRating(ratingVal),
+                          style: TextStyle(color: rColor, fontSize: 11, fontWeight: FontWeight.bold)),
+                      if (_isAdmin && !isOwn) ...[
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _confirmBlock(msg),
+                          child: Icon(
+                            _isBlocked(msg.fullSender) ? Icons.lock_open : Icons.block,
+                            size: 13,
+                            color: _isBlocked(msg.fullSender)
+                                ? Colors.greenAccent.withOpacity(0.7)
+                                : Colors.redAccent.withOpacity(0.6),
+                          ),
+                        ),
+                      ],
+                    ]),
+                  ),
+
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: isOwn ? const Color(0xFF0D3D3D) : const Color(0xFF1C1C1C),
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(14), topRight: const Radius.circular(14),
+                      bottomLeft: Radius.circular(isOwn ? 14 : 3),
+                      bottomRight: Radius.circular(isOwn ? 3 : 14),
+                    ),
+                    border: Border.all(
+                      color: isOwn ? Colors.cyanAccent.withOpacity(0.2) : Colors.white.withOpacity(0.06),
+                      width: 0.5),
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min, children: [
+                    // Reply — показываем ник оригинального отправителя
+                    if (msg.replyToText != null)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 5),
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border(left: BorderSide(
+                              color: Colors.cyanAccent.withOpacity(0.5), width: 2)),
+                        ),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          if (msg.replyToSender != null)
+                            Text(
+                              // Резолвим ник по адресу
+                              _displayName(msg.replyToSender!),
+                              style: const TextStyle(color: Colors.cyanAccent,
+                                  fontSize: 10, fontWeight: FontWeight.bold),
+                            ),
+                          Text(msg.replyToText!,
+                              style: const TextStyle(color: Colors.white54, fontSize: 11),
+                              maxLines: 2, overflow: TextOverflow.ellipsis),
+                        ]),
+                      ),
+
+                    Row(mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.end, children: [
+                      Flexible(child: _buildTextWithLinks(msg.text)),
+                      const SizedBox(width: 6),
+                      Text(_formatTime(msg.time),
+                          style: const TextStyle(color: Colors.white30, fontSize: 9, height: 1)),
+                    ]),
+                  ]),
+                ),
+              ],
+            )),
+
+            if (_selectMode && isOwn)
+              Padding(padding: const EdgeInsets.only(left: 4, bottom: 4),
+                  child: Icon(isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
+                      color: isSelected ? Colors.cyanAccent : Colors.white30, size: 18)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextWithLinks(String text) {
+    final urlRegex = RegExp(r'(https?://[^\s]+)', caseSensitive: false);
+    final matches = urlRegex.allMatches(text);
+    if (matches.isEmpty) {
+      return Text(text, style: const TextStyle(color: Colors.white, fontSize: 13.5, height: 1.35));
+    }
+    final spans = <InlineSpan>[];
+    int last = 0;
+    for (final m in matches) {
+      if (m.start > last) spans.add(TextSpan(text: text.substring(last, m.start)));
+      final url = m.group(0)!;
+      spans.add(TextSpan(
+        text: url,
+        style: const TextStyle(color: Colors.lightBlueAccent,
+            decoration: TextDecoration.underline, decorationColor: Colors.lightBlueAccent),
+        recognizer: TapGestureRecognizer()
+          ..onTap = () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      ));
+      last = m.end;
+    }
+    if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
+    return RichText(
+      text: TextSpan(style: const TextStyle(color: Colors.white, fontSize: 13.5, height: 1.35),
+          children: spans),
+    );
   }
 }
 
