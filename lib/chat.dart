@@ -330,16 +330,9 @@ class _NostrChatScreenState extends State<NostrChatScreen> {
   // UI: макс 200 последних сообщений
   static const int _pageSize = 50, _maxHistory = 500, _maxMsgLength = 4096;
 
-  static const String _adminWallet =
-      "0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3";
-  static const String _supabaseUrl = "https://ximdfelxiedpucdjwtxe.supabase.co";
-  static const String _supabaseKey =
-      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhpbWRmZWx4aWVkcHVjZGp3dHhlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4ODY5NDEsImV4cCI6MjA5MTQ2Mjk0MX0.w0J-RXM1gN2Xry18TltlnZI2zznGQx_j5EHqHVZhpQ0";
+ 
+  
 
-  static Map<String,String> get _h => {
-    "apikey": _supabaseKey, "Authorization": "Bearer $_supabaseKey",
-    "Content-Type": "application/json",
-  };
 
   bool get _isAdmin => widget.walletAddress.toLowerCase() == _adminWallet.toLowerCase();
   bool _isAdminAddr(String a) => a.toLowerCase() == _adminWallet.toLowerCase();
