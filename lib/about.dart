@@ -11,7 +11,6 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'nft_spisok.dart';
 
 // ── Конфиг ───────────────────────────────────────────────────
-const String _pinataJwt     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiIzMTNiNWIxMC05ZDA1LTRkZGMtYTkzYi0xZjRiYTZkMWFjNmMiLCJlbWFpbCI6InBhdmVrc2NiQGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJwaW5fcG9saWN5Ijp7InJlZ2lvbnMiOlt7ImRlc2lyZWRSZXBsaWNhdGlvbkNvdW50IjoxLCJpZCI6IkZSQTEifSx7ImRlc2lyZWRSZXBsaWNhdGlvbkNvdW50IjoxLCJpZCI6Ik5ZQzEifV0sInZlcnNpb24iOjF9LCJtZmFfZW5hYmxlZCI6ZmFsc2UsInN0YXR1cyI6IkFDVElWRSJ9LCJhdXRoZW50aWNhdGlvblR5cGUiOiJzY29wZWRLZXkiLCJzY29wZWRLZXlLZXkiOiIwM2EzOTUzNWFkMDYxNzdkYjlhOSIsInNjb3BlZEtleVNlY3JldCI6IjZjZGRhYmU1Yzc4ZWY3MWMwYzk4MTA4MTllNzVjMWM4OGZhMDhhMmRhZTkyYjdkZDM4MzBlMzU2NmQ3Nzk2MjciLCJleHAiOjE4MTEyMjAxODF9.bT3zxoaFukdcFA66--bheRkOhwbUQpVwB8NT2EZrhaY';
 const String _aptosNode     = 'https://fullnode.mainnet.aptoslabs.com/v1';
 const String _aptosIndexer  = 'https://api.mainnet.aptoslabs.com/v1/graphql';
 const String _adminAddress  = '0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3';
