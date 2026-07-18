@@ -1,12 +1,12 @@
-# MEE MEGA Mining App 🚀
+# MEGA WALLET 🚀
 
-**MEE Mining App** — это майнер монеты MEE, MEGA  приложение, разработанное на фреймворке **Flutter**.
+**MEGA WALLET** — это крипто кошелек на блокчейне Aptos, приложение, разработанное на фреймворке **Flutter**.
 ## 📥 Загрузки
 
 [![DOWNLOADS](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pavekscb/m/main/stats.json)](https://github.com/pavekscb/m/releases) [![DOWNLOADS LATEST](https://img.shields.io/github/downloads/pavekscb/m/latest/total?label=Latest%20release%20downloads&color=blue)](https://github.com/pavekscb/m/releases/latest) 
 
 ## 📱 О приложении
-* **Версия:** 1.1.3 (от 31.05.2026)
+* **Версия:** 1.1.4 (от 38.07.2026)
 * **Платформа:** Android
 * **Минимальная версия Android:** 5.0 (API 21)
 * **Рекомендуемая версия Android:** 11.0+ (API 30+)
@@ -41,6 +41,8 @@
 16.04.2026 - Добавлен чат.
 
 31.05.2026 - Добавлен минт NFT.
+
+18.07.2026 - Работа над ошибками.
 
 
 ------
