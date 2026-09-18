@@ -14,10 +14,13 @@ import 'swap.dart';
 import 'staking.dart';
 import 'airdrop.dart';
 import 'about.dart';
+import 'app_logger.dart';
+import 'error_log_page.dart';
 import 'chat.dart';
 import 'send_page.dart';
 import 'update.dart';
 import 'price_service.dart';
+import 'staking_totals_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 
@@ -54,6 +57,9 @@ class _WalletPageState extends State<WalletPage> {
   String? _aptBalance;
   List<TokenBalance> _allTokens = [];
   List<TokenBalance> _tokens = [];
+  Map<String, double> _prices = {};
+  double? _totalPortfolioUsd; // считается последним, после токенов + курсов + стейкинга
+
   String? _error;
   bool _loading = true;
   String _accountName = ''; // имя активного кошелька
@@ -155,6 +161,7 @@ class _WalletPageState extends State<WalletPage> {
         .timeout(const Duration(seconds: 15));
     if (response.statusCode == 404) return '0.00000000 APT';
     if (response.statusCode != 200) {
+      AppLogger.error('APT_BALANCE', 'HTTP ${response.statusCode}');
       throw Exception('Ошибка сети: HTTP ${response.statusCode}');
     }
     final raw = int.parse(response.body.trim().replaceAll('"', ''));
@@ -162,7 +169,117 @@ class _WalletPageState extends State<WalletPage> {
     return '${apt.toStringAsFixed(8)} APT';
   }
 
+  // Прямой баланс legacy Coin<T> (APT, MEE, MEGA) — тот же эндпоинт,
+  // что и _fetchAptBalance, но для произвольного coinType. Работает мгновенно,
+  // без задержки индексера.
+  Future<double> _fetchCoinBalanceDirect(String address, String coinType) async {
+    final url = Uri.parse(
+      'https://fullnode.mainnet.aptoslabs.com/v1/accounts/$address/balance/$coinType',
+    );
+    final response = await http
+        .get(url, headers: {'Accept': 'application/json'})
+        .timeout(const Duration(seconds: 15));
+    if (response.statusCode == 404) return 0; // аккаунт ещё не держал этот coin
+    if (response.statusCode != 200) {
+      throw Exception('HTTP ${response.statusCode}');
+    }
+    final raw = int.parse(response.body.trim().replaceAll('"', ''));
+    return raw.toDouble();
+  }
+
+  // Прямой баланс нативного Fungible Asset (USDT/USDC) через view-функцию
+  // primary_fungible_store::balance — тоже напрямую с ноды, без индексера.
+  Future<double> _fetchFungibleAssetBalanceDirect(String address, String metadataAddress) async {
+    final url = Uri.parse('https://fullnode.mainnet.aptoslabs.com/v1/view');
+    final body = jsonEncode({
+      'function': '0x1::primary_fungible_store::balance',
+      'type_arguments': ['0x1::object::ObjectCore'],
+      'arguments': [address, metadataAddress],
+    });
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      body: body,
+    ).timeout(const Duration(seconds: 15));
+    if (response.statusCode != 200) {
+      // Скорее всего аккаунт никогда не держал этот актив — трактуем как 0
+      return 0;
+    }
+    final List<dynamic> result = jsonDecode(response.body);
+    if (result.isEmpty) return 0;
+    return double.tryParse(result[0].toString()) ?? 0;
+  }
+
+  // Закреплённые токены — тянем напрямую с ноды (Coin через /balance,
+  // Fungible Asset через primary_fungible_store::balance). Это устраняет
+  // задержку индексера, которая раньше могла доходить до минуты.
+  static const List<Map<String, dynamic>> _pinnedTokens = [
+    {'kind': 'coin', 'assetType': '0x1::aptos_coin::AptosCoin',
+     'name': 'Aptos Coin', 'symbol': 'APT', 'decimals': 8},
+    {'kind': 'coin', 'assetType': '0xe9c192ff55cffab3963c695cff6dbf9dad6aff2bb5ac19a6415cad26a81860d9::mee_coin::MeeCoin',
+     'name': 'MEE Coin', 'symbol': 'MEE', 'decimals': 6},
+    {'kind': 'coin', 'assetType': '0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3::mega_coin::MEGA',
+     'name': 'MEGA', 'symbol': 'MEGA', 'decimals': 8},
+    {'kind': 'fa', 'assetType': '0x357b0b74bc833e95a115ad22604854d6b0fca151cecd94111770e5d6ffc9dc2b',
+     'name': 'Tether USD', 'symbol': 'USDT', 'decimals': 6},
+    {'kind': 'fa', 'assetType': '0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b',
+     'name': 'USD Coin', 'symbol': 'USDC', 'decimals': 6},
+  ];
+
   Future<List<TokenBalance>> _fetchAllTokens(String address) async {
+    // 1. Пинованные токены — параллельно, напрямую с ноды.
+    //    Ошибка по одному конкретному токену не должна ронять весь список —
+    //    в этом случае показываем для него 0 и логируем, следующее
+    //    обновление подтянет актуальное значение.
+    final pinnedResults = await Future.wait(_pinnedTokens.map((p) async {
+      final decimals = p['decimals'] as int;
+      final assetType = p['assetType'] as String;
+      try {
+        final raw = p['kind'] == 'coin'
+            ? await _fetchCoinBalanceDirect(address, assetType)
+            : await _fetchFungibleAssetBalanceDirect(address, assetType);
+        return TokenBalance(
+          name: p['name'] as String,
+          symbol: p['symbol'] as String,
+          amount: raw / _pow10(decimals),
+          decimals: decimals,
+          assetType: assetType,
+        );
+      } catch (e) {
+        AppLogger.error('TOKEN_BALANCE', '${p['symbol']}: $e');
+        return TokenBalance(
+          name: p['name'] as String,
+          symbol: p['symbol'] as String,
+          amount: 0,
+          decimals: decimals,
+          assetType: assetType,
+        );
+      }
+    }));
+
+    final List<TokenBalance> tokens = [...pinnedResults];
+
+    // 2. Всё остальное (незнакомые/новые токены) — по-прежнему через индексер.
+    //    Для них небольшая задержка не критична, это редкий случай.
+    try {
+      final exclude = _pinnedTokens.map((p) => p['assetType'] as String).toSet();
+      final extra = await _fetchExtraTokensFromIndexer(address, exclude);
+      tokens.addAll(extra);
+    } catch (e) {
+      AppLogger.error('INDEXER', 'Доп. токены недоступны: $e');
+    }
+
+    tokens.sort((a, b) {
+      if (a.symbol == 'APT') return -1;
+      if (b.symbol == 'APT') return 1;
+      return b.amount.compareTo(a.amount);
+    });
+    return tokens;
+  }
+
+  // Индексер используется только для токенов, которых нет в _pinnedTokens —
+  // основные 5 монет уже получены напрямую с ноды в _fetchAllTokens.
+  Future<List<TokenBalance>> _fetchExtraTokensFromIndexer(String address, Set<String> exclude) async {
     const url = 'https://api.mainnet.aptoslabs.com/v1/graphql';
     final query = '''
     {
@@ -199,6 +316,8 @@ class _WalletPageState extends State<WalletPage> {
 
     final List<TokenBalance> tokens = [];
     for (final item in balances) {
+      final assetType = item['asset_type'] as String? ?? '';
+      if (exclude.contains(assetType)) continue; // уже получили напрямую с ноды
       final meta = item['metadata'];
       if (meta == null) continue;
       final decimals = (meta['decimals'] as num?)?.toInt() ?? 8;
@@ -210,35 +329,9 @@ class _WalletPageState extends State<WalletPage> {
         symbol: meta['symbol'] ?? '???',
         amount: amount,
         decimals: decimals,
-        assetType: item['asset_type'] ?? '',
+        assetType: assetType,
       ));
     }
-
-    // Закреплённые токены — показываем всегда, даже с нулевым балансом
-    const List<Map<String,dynamic>> pinned = [
-      {'assetType': '0xe9c192ff55cffab3963c695cff6dbf9dad6aff2bb5ac19a6415cad26a81860d9::mee_coin::MeeCoin',
-       'name': 'MEE Coin', 'symbol': 'MEE', 'decimals': 6},
-      {'assetType': '0x350f1f65a2559ad37f95b8ba7c64a97c23118856ed960335fce4cd222d5577d3::mega_coin::MEGA',
-       'name': 'MEGA', 'symbol': 'MEGA', 'decimals': 8},
-      {'assetType': '0x357b0b74bc833e95a115ad22604854d6b0fca151cecd94111770e5d6ffc9dc2b',
-       'name': 'Tether USD', 'symbol': 'USDT', 'decimals': 6},
-      {'assetType': '0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b',
-       'name': 'USD Coin', 'symbol': 'USDC', 'decimals': 6},
-    ];
-    for (final p in pinned) {
-      final exists = tokens.any((t) => t.assetType == p['assetType']);
-      if (!exists) {
-        tokens.add(TokenBalance(
-          name: p['name']!, symbol: p['symbol']!,
-          amount: 0, decimals: p['decimals']!, assetType: p['assetType']!,
-        ));
-      }
-    }
-    tokens.sort((a, b) {
-      if (a.symbol == 'APT') return -1;
-      if (b.symbol == 'APT') return 1;
-      return b.amount.compareTo(a.amount);
-    });
     return tokens;
   }
 
@@ -325,21 +418,49 @@ class _WalletPageState extends State<WalletPage> {
       });
 
      
-      Map<String, double> _prices = {};
+      // Map<String, double> _prices = {};
 
-      
+      /*
       PriceService.instance.fetchPrices().then((p) {
         if (mounted) setState(() => _prices = p);
+      });*/
+
+      PriceService.instance.fetchPrices().then((p) async {
+        if (mounted) setState(() => _prices = p);
+        await _computeTotalPortfolio(p);
       });
 
 
     } catch (e) {
+      AppLogger.error('WALLET', e.toString().replaceFirst('Exception: ', ''));
       setState(() {
         _error = e.toString().replaceFirst('Exception: ', '');
         _loading = false;
       });
     }
   }
+
+  Future<void> _computeTotalPortfolio(Map<String, double> prices) async {
+    if (_address == null) return;
+    try {
+
+      double total = 0;
+      for (final t in _tokens) {
+        final price = prices[t.symbol.toUpperCase()] ?? 0;
+        total += t.amount * price;
+      }
+
+      final staked = await fetchStakingTotals(_address!);
+      for (final entry in staked.entries) {
+        final price = prices[entry.key] ?? 0;
+        total += entry.value * price;
+      }
+
+      if (mounted) setState(() => _totalPortfolioUsd = total);
+    } catch (_) {}
+  }
+
+
 
   Future<void> _reloadTokenSettings() async {
     try {
@@ -460,16 +581,32 @@ class _WalletPageState extends State<WalletPage> {
                 title: 'О приложении',
                 subtitle: 'Проверить обновления и информация',
                 onTap: () {
-                  Navigator.pop(ctx); // Закрываем шторку настроек
+                  Navigator.pop(ctx);
                   Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const UpdatePage()),
                   );
                 },
               ),
+              const SizedBox(height: 8),
+              _SettingsButton(
+                icon: Icons.bug_report_outlined,
+                title: 'Журнал ошибок',
+                subtitle: AppLogger.errors.isEmpty
+                    ? 'Ошибок нет'
+                    : '${AppLogger.errors.length} ошибок — нажмите для просмотра',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const ErrorLogPage()),
+                  );
+                },
+              ),
               const SizedBox(height: 16),
               const Text(
-                'Версия: v1.1.3',
+                'Версия: v1.1.7',
                 style: TextStyle(
                   color: Colors.white24,
                   fontSize: 12,
@@ -712,12 +849,28 @@ class _WalletPageState extends State<WalletPage> {
           ),
         ),
 
+      /*
       if (_aptBalance != null) ...[
         _InfoCard(
           label: 'БАЛАНС APT',
           value: _aptBalance!,
           icon: Icons.toll_outlined,
           accent: const Color(0xFF00D4AA),
+          refreshing: _loading,
+        ),
+        const SizedBox(height: 20),
+      ],
+        */
+      if (_aptBalance != null) ...[
+        _InfoCard(
+          label: 'БАЛАНС APT',
+          value: _aptBalance!,
+          icon: Icons.toll_outlined,
+          accent: const Color(0xFF00D4AA),
+          refreshing: _loading,
+          labelSuffix: _totalPortfolioUsd != null
+              ? '(${formatUsd(_totalPortfolioUsd!)})'
+              : null,
         ),
         const SizedBox(height: 20),
       ],
@@ -845,6 +998,14 @@ class _WalletPageState extends State<WalletPage> {
                   style: const TextStyle(fontSize: 10,
                       color: Color(0xFF00D4AA))),
             ),
+            if (_loading) ...[
+              const SizedBox(width: 8),
+              const SizedBox(
+                width: 10, height: 10,
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.5, color: Colors.white38),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 10),
@@ -862,7 +1023,12 @@ class _WalletPageState extends State<WalletPage> {
                 token: token,
                 isLast: i == _tokens.length - 1,
                 formatAmount: _formatAmount,
+                prices: _prices,
               );
+              
+
+
+
             }).toList(),
           ),
         ),
@@ -1092,36 +1258,104 @@ class _TokenRow extends StatelessWidget {
                         style: const TextStyle(color: Colors.white,
                             fontSize: 14, fontWeight: FontWeight.w500),
                         overflow: TextOverflow.ellipsis),
+                    /*
                     Text(token.symbol,
                         style: TextStyle(
-                            color: color.withOpacity(0.7), fontSize: 11)),
+                            color: color.withOpacity(0.7), fontSize: 11)), */
+
+                    Row(
+                      children: [
+                        Text(token.symbol,
+                            style: TextStyle(
+                                color: color.withOpacity(0.7), fontSize: 11)),
+
+
+                        Builder(builder: (_) {
+                          final isMega = token.symbol.toUpperCase() == 'MEGA';
+                          if (isMega && !isMegaMintEnded()) {
+                            return Text(
+                              '  ·  ${megaPriceInApt().toStringAsFixed(2)} APT',
+                              style: const TextStyle(
+                                  color: Colors.white38, fontSize: 11),
+                            );
+                          }
+                          final price = prices[token.symbol.toUpperCase()] ?? 0;
+                          if (price == 0) return const SizedBox.shrink();
+                          return Text(
+                            '  ·  ${formatUsdPrice(price)}',
+                            style: const TextStyle(
+                                color: Colors.white38, fontSize: 11),
+                          );
+                        }),
+
+                        /*
+                        Builder(builder: (_) {
+                          final isMega = token.symbol.toUpperCase() == 'MEGA';
+                          if (isMega) {
+                            return Text(
+                              '  ·  ${megaPriceInApt().toStringAsFixed(6)} APT',
+                              style: const TextStyle(
+                                  color: Colors.white38, fontSize: 11),
+                            );
+                          }
+                          final price = prices[token.symbol.toUpperCase()] ?? 0;
+                          if (price == 0) return const SizedBox.shrink();
+                          return Text(
+                            '  ·  ${formatUsdPrice(price)}',
+                            style: const TextStyle(
+                                color: Colors.white38, fontSize: 11),
+                          );
+                        }),*/
+
+
+
+
+                        /*
+                        Builder(builder: (_) {
+                          final price = prices[token.symbol.toUpperCase()] ?? 0;
+                          if (price == 0) return const SizedBox.shrink();
+                          return Text(
+                            '  ·  ${formatUsdPrice(price)}',
+                            style: const TextStyle(
+                                color: Colors.white38, fontSize: 11),
+                          );
+                        }), */
+
+
+
+                        
+                      ],
+                    ),
+
+
+
                   ],
                 ),
               ),
               
-              /*
-              Text(
-                '${formatAmount(token.amount, token.decimals)} ${token.symbol}',
-                style: const TextStyle(color: Colors.white, fontSize: 14,
-                    fontWeight: FontWeight.w600),
-              ),*/
- 
+             
 
-              Text(
-                '${formatAmount(token.amount, token.decimals)} ${token.symbol}',
-                style: const TextStyle(color: Colors.white, fontSize: 14,
-                    fontWeight: FontWeight.w600),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '${formatAmount(token.amount, token.decimals)} ${token.symbol}',
+                    style: const TextStyle(color: Colors.white, fontSize: 14,
+                        fontWeight: FontWeight.w600),
+                  ),
+
+                  
+                  Builder(builder: (_) {
+                    final price = prices[token.symbol.toUpperCase()] ?? 0;
+                    final usd = token.amount * price;
+                    if (usd == 0) return const SizedBox.shrink();
+                    return Text(
+                      formatUsd(usd),
+                      style: const TextStyle(color: Colors.white38, fontSize: 11),
+                    );
+                  }),
+                ],
               ),
-              Builder(builder: (_) {
-                final price = prices[token.symbol.toUpperCase()] ?? 0;
-                final usd = token.amount * price;
-                if (usd == 0) return const SizedBox.shrink();
-                return Text(
-                  formatUsd(usd),
-                  style: const TextStyle(color: Colors.white38, fontSize: 11),
-                );
-              }),   
-
 
 
             ],
@@ -1215,15 +1449,31 @@ class _SettingsButton extends StatelessWidget {
 }
 
 // ── Карточка результата ───────────────────────────────────────
+/*
 class _InfoCard extends StatelessWidget {
   final String label;
   final String value;
   final IconData icon;
   final Color? accent;
   final VoidCallback? onCopy;
+  final bool refreshing; // показывает маленькую иконку обновления без текста
 
   const _InfoCard({required this.label, required this.value,
-    required this.icon, this.accent, this.onCopy});
+    required this.icon, this.accent, this.onCopy, this.refreshing = false});
+*/
+class _InfoCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color? accent;
+  final VoidCallback? onCopy;
+  final bool refreshing; // показывает маленькую иконку обновления без текста
+  final String? labelSuffix; // например "($500)" сразу после label, зелёным
+
+  const _InfoCard({required this.label, required this.value,
+    required this.icon, this.accent, this.onCopy, this.refreshing = false,
+    this.labelSuffix});
+
 
   @override
   Widget build(BuildContext context) {
@@ -1241,10 +1491,32 @@ class _InfoCard extends StatelessWidget {
         children: [
           Row(
             children: [
+              /*
               Icon(icon, color: color.withOpacity(0.6), size: 13),
               const SizedBox(width: 6),
               Text(label, style: TextStyle(color: color.withOpacity(0.5),
                   fontSize: 10, letterSpacing: 1.0)),
+              if (refreshing) ...[
+              */
+              Icon(icon, color: color.withOpacity(0.6), size: 13),
+              const SizedBox(width: 6),
+              Text(label, style: TextStyle(color: color.withOpacity(0.5),
+                  fontSize: 10, letterSpacing: 1.0)),
+              if (labelSuffix != null) ...[
+                const SizedBox(width: 4),
+                Text(labelSuffix!, style: const TextStyle(
+                    color: Color(0xFF00D4AA), fontSize: 10, fontWeight: FontWeight.bold)),
+              ],
+              if (refreshing) ...[
+
+
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 10, height: 10,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 1.5, color: color.withOpacity(0.6)),
+                ),
+              ],
               if (onCopy != null) ...[
                 const Spacer(),
                 GestureDetector(
@@ -1442,7 +1714,7 @@ class _BottomNav extends StatelessWidget {
       (icon: Icons.account_balance_wallet_outlined, label: 'Кошелёк'),
       (icon: Icons.card_giftcard_outlined,          label: 'Аирдроп'),
       (icon: Icons.token_outlined,            label: 'Nft'),
-      (icon: Icons.forum_outlined,                  label: 'Чат'),
+      (icon: Icons.forum_outlined,                  label: 'Holders'),
     ];
 
     return Container(
