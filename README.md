@@ -6,7 +6,7 @@
 [![DOWNLOADS](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/pavekscb/m/main/stats.json)](https://github.com/pavekscb/m/releases) [![DOWNLOADS LATEST](https://img.shields.io/github/downloads/pavekscb/m/latest/total?label=Latest%20release%20downloads&color=blue)](https://github.com/pavekscb/m/releases/latest) 
 
 ## 📱 О приложении
-* **Версия:** 1.1.6 (от 19.07.2026)
+* **Версия:** 1.1.7 (от 18.09.2026)
 * **Платформа:** Android
 * **Минимальная версия Android:** 5.0 (API 21)
 * **Рекомендуемая версия Android:** 11.0+ (API 30+)
@@ -45,6 +45,8 @@
 18.07.2026 - Работа над ошибками.
 
 19.07.2026 (Исправлен баг с отображением балансов)
+
+18.09.2026 - Добавлены курсы монет. Подсчет общего баланс в $.
 
 
 ------
